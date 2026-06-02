@@ -11,8 +11,13 @@ import plotly.express as px
 import streamlit as st
 
 # Inject API keys from secrets before importing the audit engine
-os.environ["CONNECTEAM_API_KEY"] = st.secrets.get("CONNECTEAM_API_KEY", "")
-os.environ["ANTHROPIC_API_KEY"]  = st.secrets.get("ANTHROPIC_API_KEY", "")
+# Only override if the secret is actually set — otherwise let the audit script use its own defaults
+_ct_key = st.secrets.get("CONNECTEAM_API_KEY", "")
+_ai_key = st.secrets.get("ANTHROPIC_API_KEY", "")
+if _ct_key:
+    os.environ["CONNECTEAM_API_KEY"] = _ct_key
+if _ai_key:
+    os.environ["ANTHROPIC_API_KEY"] = _ai_key
 
 import io
 from connecteam_audit import run_audit
