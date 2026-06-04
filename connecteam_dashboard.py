@@ -155,7 +155,7 @@ if not st.session_state.get("authenticated"):
 @st.cache_data(ttl=300, show_spinner=False)
 def load_audit(days_back: int):
     issues = run_audit(days_back)
-    fetched_at = datetime.datetime.now().strftime("%d %b %Y, %-I:%M %p")
+    fetched_at = datetime.datetime.now().strftime("%d %b %Y, %I:%M %p")
     return issues, fetched_at
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
@@ -165,12 +165,35 @@ with st.sidebar:
     st.markdown("##### Compliance Dashboard")
     st.divider()
 
-    days_back = st.selectbox(
+    period_mode = st.radio(
         "Audit period",
-        [7, 14, 30],
-        index=0,
-        format_func=lambda d: f"Last {d} days",
+        ["Quick select", "Custom dates"],
+        horizontal=True,
     )
+
+    today = datetime.date.today()
+
+    if period_mode == "Quick select":
+        days_back = st.selectbox(
+            "Period",
+            [7, 14, 30],
+            index=0,
+            format_func=lambda d: f"Last {d} days",
+            label_visibility="collapsed",
+        )
+        start_date = today - datetime.timedelta(days=days_back)
+    else:
+        date_range = st.date_input(
+            "From / To",
+            value=(today - datetime.timedelta(days=7), today),
+            max_value=today,
+            label_visibility="collapsed",
+        )
+        if isinstance(date_range, (list, tuple)) and len(date_range) == 2:
+            start_date, end_date = date_range
+        else:
+            start_date = date_range[0] if date_range else today - datetime.timedelta(days=7)
+        days_back = max((today - start_date).days, 1)
 
     st.markdown("<br>", unsafe_allow_html=True)
     if st.button("🔄  Refresh Data", use_container_width=True, type="primary"):
@@ -220,9 +243,7 @@ n_total    = len(df_all)
 
 st.markdown("## NDIS Compliance Audit")
 
-now = datetime.datetime.now()
-start = now - datetime.timedelta(days=days_back)
-st.caption(f"{start.strftime('%d %b')} – {now.strftime('%d %b %Y')}  ·  {n_total} issues found")
+st.caption(f"{start_date.strftime('%d %b %Y')} – {today.strftime('%d %b %Y')}  ·  {n_total} issues found")
 
 # Alert banner
 if n_critical > 0:
