@@ -18,7 +18,7 @@ if _ct_key:
 if _ai_key:
     os.environ["ANTHROPIC_API_KEY"] = _ai_key
 
-from connecteam_audit import run_audit, fetch_all_users
+from connecteam_audit import run_audit, fetch_all_users, fetch_user_custom_fields
 
 # ── Page config ───────────────────────────────────────────────────────────────
 
@@ -92,6 +92,12 @@ PLAIN_LABELS = {
     "FORM FREQUENCY -- NADA":                   "Nada weekly form quota not met",
     "FORM FREQUENCY -- JOHN":                   "John weekly form quota not met",
     "FORM FREQUENCY -- NICOLE":                 "Nicole weekly form quota not met",
+    # New categories (7 improvements)
+    "APPROVED LEAVE":                           "Absent — approved leave on file",
+    "BREAK COMPLIANCE":                         "No break recorded on long shift (Fair Work)",
+    "CROSS-WORKER COPY-PASTE NOTES":            "Two workers submitted near-identical notes",
+    "ONBOARDING INCOMPLETE":                    "Worker has not finished mandatory onboarding",
+    "UNAUTHORISED CLIENT ACCESS":               "Clocked in for a client not assigned to them",
 }
 
 REQUIRED_DOCS = [
@@ -240,6 +246,68 @@ def load_staff_names():
         )
     except Exception:
         return []
+
+# Keyword mapping: doc type → substrings to look for in a custom field name
+_DOC_KEYWORDS = {
+    "NDIS Worker Screening":         ["ndis", "screening", "worker screening"],
+    "Working With Children Check":   ["wwcc", "working with children", "children check"],
+    "Police Check":                  ["police"],
+    "First Aid Certificate":         ["first aid"],
+    "CPR Certificate":               ["cpr"],
+    "Manual Handling Training":      ["manual handling"],
+}
+
+@st.cache_data(ttl=600, show_spinner=False)
+def load_custom_field_docs():
+    """
+    Tries to read document expiry dates from Connecteam user custom fields.
+    Returns dict: worker_name -> {doc_type -> expiry_string}  (only populated fields).
+    Returns ({}, []) if no matching fields found.
+    """
+    try:
+        fields = fetch_user_custom_fields()
+        users  = fetch_all_users()
+    except Exception:
+        return {}, []
+
+    # Find custom fields that look like document expiry fields
+    matched_fields = {}  # doc_type -> customFieldId
+    for field in fields:
+        fname = (field.get("name") or "").lower()
+        fid   = field.get("customFieldId") or field.get("id")
+        ftype = (field.get("type") or "").lower()
+        if not fid:
+            continue
+        for doc_type, keywords in _DOC_KEYWORDS.items():
+            if any(kw in fname for kw in keywords):
+                matched_fields[doc_type] = fid
+                break
+
+    if not matched_fields:
+        return {}, []
+
+    # Extract values from user objects (custom fields may be embedded in user data)
+    result = {}
+    for u in users.values():
+        name = f"{u.get('firstName','')} {u.get('lastName','')}".strip()
+        if not name:
+            continue
+        custom_vals = u.get("customFields") or u.get("customFieldValues") or []
+        if isinstance(custom_vals, dict):
+            custom_vals = [{"customFieldId": k, "value": v} for k, v in custom_vals.items()]
+        if not custom_vals:
+            continue
+        worker_docs = {}
+        for cv in custom_vals:
+            field_id = cv.get("customFieldId") or cv.get("id")
+            value    = cv.get("value") or cv.get("fieldValue") or ""
+            for doc_type, mapped_id in matched_fields.items():
+                if str(field_id) == str(mapped_id) and value:
+                    worker_docs[doc_type] = str(value).strip()
+        if worker_docs:
+            result[name] = worker_docs
+
+    return result, list(matched_fields.keys())
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 
@@ -411,6 +479,34 @@ with tab1:
         for _, row in restrict.iterrows():
             st.markdown(f"- **{row['Worker']}** · {row['Client']} · {row['Date']}")
 
+    onboarding_act = df_all[df_all["Category"] == "ONBOARDING INCOMPLETE"]
+    if not onboarding_act.empty:
+        st.markdown('<div class="section-title">🎓 Onboarding Not Completed</div>', unsafe_allow_html=True)
+        st.error(f"{len(onboarding_act)} worker(s) are delivering care with incomplete mandatory onboarding.")
+        for _, row in onboarding_act.iterrows():
+            st.markdown(f"- **{row['Worker']}** — {row['Detail']}")
+
+    unauth_act = df_all[df_all["Category"] == "UNAUTHORISED CLIENT ACCESS"]
+    if not unauth_act.empty:
+        st.markdown('<div class="section-title">🔑 Unauthorised Client Access</div>', unsafe_allow_html=True)
+        st.error(f"{len(unauth_act)} worker(s) clocked in for clients they are not assigned to.")
+        for _, row in unauth_act.iterrows():
+            st.markdown(f"- **{row['Worker']}** → **{row['Client']}** · {row['Detail']}")
+
+    cross_paste = df_all[df_all["Category"] == "CROSS-WORKER COPY-PASTE NOTES"]
+    if not cross_paste.empty:
+        st.markdown('<div class="section-title">📋 Cross-Worker Note Sharing</div>', unsafe_allow_html=True)
+        st.warning(f"{len(cross_paste)} case(s) of two workers submitting near-identical notes.")
+        for _, row in cross_paste.iterrows():
+            st.markdown(f"- **{row['Worker']}** · {row['Client']} · {row['Date']}")
+
+    leave_items = df_all[df_all["Category"] == "APPROVED LEAVE"]
+    if not leave_items.empty:
+        st.markdown('<div class="section-title">✅ Approved Leave (informational)</div>', unsafe_allow_html=True)
+        st.info(f"{len(leave_items)} shift(s) marked absent where the worker had recorded unavailability — these are not compliance failures.")
+        for _, row in leave_items.iterrows():
+            st.markdown(f"- **{row['Worker']}** · {row['Client']} · {row['Date']}")
+
 # ─────────────────────────────────────────────────
 # TAB 2 — By Worker
 # ─────────────────────────────────────────────────
@@ -467,6 +563,30 @@ with tab2:
             st.markdown("<br>", unsafe_allow_html=True)
             wdf = df_staff[df_staff["Worker"] == selected_worker][["Severity","Issue","Client","Date","Detail"]]
             st.dataframe(wdf.style.apply(colour_row, axis=1), use_container_width=True, hide_index=True)
+
+    # Onboarding status section
+    onboarding_issues = df_all[df_all["Category"] == "ONBOARDING INCOMPLETE"]
+    if not onboarding_issues.empty:
+        st.markdown('<div class="section-title">🎓 Onboarding Incomplete</div>', unsafe_allow_html=True)
+        st.warning(f"{len(onboarding_issues)} worker(s) have not finished mandatory onboarding packs.")
+        for _, row in onboarding_issues.iterrows():
+            st.markdown(f"- **{row['Worker']}** — {row['Detail']}")
+
+    # Unauthorised access section
+    unauth_issues = df_all[df_all["Category"] == "UNAUTHORISED CLIENT ACCESS"]
+    if not unauth_issues.empty:
+        st.markdown('<div class="section-title">🚫 Unauthorised Client Access</div>', unsafe_allow_html=True)
+        st.error(f"{len(unauth_issues)} instance(s) of workers clocking in for clients they are not assigned to.")
+        for _, row in unauth_issues.iterrows():
+            st.markdown(f"- **{row['Worker']}** clocked in for **{row['Client']}** — {row['Detail']}")
+
+    # Break compliance section
+    break_issues = df_staff[df_staff["Category"] == "BREAK COMPLIANCE"]
+    if not break_issues.empty:
+        st.markdown('<div class="section-title">⏱️ Break Compliance (Fair Work)</div>', unsafe_allow_html=True)
+        st.warning(f"{len(break_issues)} shift(s) over {5}h with no recorded break.")
+        bsummary = break_issues.groupby("Worker").size().reset_index(name="Shifts Missing Break")
+        st.dataframe(bsummary, use_container_width=True, hide_index=True)
 
 # ─────────────────────────────────────────────────
 # TAB 3 — By Client
@@ -531,7 +651,6 @@ with tab4:
 
     # Initialise document data in session state
     if "doc_data" not in st.session_state:
-        # Try to load from secrets (JSON string)
         saved = st.secrets.get("DOCUMENTS_JSON", "")
         if saved:
             try:
@@ -540,6 +659,27 @@ with tab4:
                 st.session_state.doc_data = {}
         else:
             st.session_state.doc_data = {}
+
+    # Sync from Connecteam custom fields
+    sync_col, _ = st.columns([1, 3])
+    with sync_col:
+        if st.button("🔄  Sync from Connecteam", help="Reads document expiry dates stored in Connecteam user custom fields and pre-fills any matching entries below."):
+            with st.spinner("Reading Connecteam custom fields…"):
+                cf_docs, matched_doc_types = load_custom_field_docs()
+            if cf_docs:
+                merged = dict(st.session_state.doc_data)
+                updated = 0
+                for worker, docs in cf_docs.items():
+                    merged.setdefault(worker, {})
+                    for doc_type, expiry in docs.items():
+                        if expiry and expiry not in ("", "nan", "None"):
+                            merged[worker][doc_type] = expiry
+                            updated += 1
+                st.session_state.doc_data = merged
+                st.success(f"Synced {updated} document field(s) from Connecteam for {len(cf_docs)} worker(s). Matching fields: {', '.join(matched_doc_types)}.")
+                st.rerun()
+            else:
+                st.info("No matching document custom fields found in Connecteam. You can still enter expiry dates manually below, or add document fields to worker profiles in Connecteam first.")
 
     # Build editable dataframe
     rows = []
