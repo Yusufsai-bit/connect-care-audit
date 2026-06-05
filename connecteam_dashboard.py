@@ -5,12 +5,12 @@ Run: streamlit run connecteam_dashboard.py
 
 import os
 import io
+import calendar
 import datetime
+import json
 import pandas as pd
-import plotly.express as px
 import streamlit as st
 
-# Inject API keys from secrets before importing the audit engine
 _ct_key = st.secrets.get("CONNECTEAM_API_KEY", "")
 _ai_key = st.secrets.get("ANTHROPIC_API_KEY", "")
 if _ct_key:
@@ -22,62 +22,38 @@ from connecteam_audit import run_audit, fetch_all_users
 
 # ── Page config ───────────────────────────────────────────────────────────────
 
-st.set_page_config(
-    page_title="Connect Care Compliance",
-    page_icon="🛡️",
-    layout="wide",
-)
+st.set_page_config(page_title="Connect Care Compliance", page_icon="🛡️", layout="wide")
 
 st.markdown("""
 <style>
     .block-container { padding-top: 1.5rem; }
-    .metric-card {
-        border-radius: 12px; padding: 1.2rem 1rem;
-        text-align: center; border-left: 5px solid #ccc;
-        background: #f8f9fa;
-    }
-    .metric-card.critical { border-left-color: #d62728; background: #fff5f5; }
-    .metric-card.high     { border-left-color: #ff7f0e; background: #fff8f0; }
-    .metric-card.medium   { border-left-color: #e6c200; background: #fffdf0; }
-    .metric-card.total    { border-left-color: #4c78a8; background: #f0f4ff; }
-    .metric-number { font-size: 2.4rem; font-weight: 700; line-height: 1; }
-    .metric-label  { font-size: 0.85rem; color: #666; margin-top: 0.3rem; }
-    .metric-delta  { font-size: 0.78rem; margin-top: 0.2rem; }
-    .delta-up   { color: #d62728; }
-    .delta-down { color: #2ca02c; }
-    .delta-same { color: #888; }
-    .alert-banner {
-        background: #fff0f0; border: 1.5px solid #d62728;
-        border-radius: 10px; padding: 0.9rem 1.2rem;
-        margin-bottom: 1rem; font-weight: 600; color: #d62728;
-    }
-    .section-title {
-        font-size: 1.05rem; font-weight: 600; color: #333;
-        margin: 1.2rem 0 0.5rem; padding-bottom: 0.3rem;
-        border-bottom: 2px solid #eee;
-    }
-    .contact-card {
-        background: #f8f9fa; border-radius: 8px;
-        padding: 0.7rem 1rem; margin-bottom: 0.4rem;
-        display: flex; gap: 1.5rem; align-items: center;
-    }
-    .score-badge {
-        display: inline-block; border-radius: 20px;
-        padding: 2px 12px; font-size: 0.85rem; font-weight: 700;
-        color: white;
-    }
-    div[data-testid="stTabs"] button { font-size: 0.95rem; font-weight: 500; }
+    .metric-card { border-radius:12px; padding:1.2rem 1rem; text-align:center;
+                   border-left:5px solid #ccc; background:#f8f9fa; }
+    .metric-card.critical { border-left-color:#d62728; background:#fff5f5; }
+    .metric-card.high     { border-left-color:#ff7f0e; background:#fff8f0; }
+    .metric-card.medium   { border-left-color:#e6c200; background:#fffdf0; }
+    .metric-card.total    { border-left-color:#4c78a8; background:#f0f4ff; }
+    .metric-number { font-size:2.4rem; font-weight:700; line-height:1; }
+    .metric-label  { font-size:0.85rem; color:#666; margin-top:0.3rem; }
+    .metric-delta  { font-size:0.78rem; margin-top:0.2rem; }
+    .delta-up { color:#d62728; } .delta-down { color:#2ca02c; } .delta-same { color:#888; }
+    .alert-banner { background:#fff0f0; border:1.5px solid #d62728; border-radius:10px;
+                    padding:0.9rem 1.2rem; margin-bottom:1rem; font-weight:600; color:#d62728; }
+    .section-title { font-size:1.05rem; font-weight:600; color:#333; margin:1.2rem 0 0.5rem;
+                     padding-bottom:0.3rem; border-bottom:2px solid #eee; }
+    div[data-testid="stTabs"] button { font-size:0.95rem; font-weight:500; }
 </style>
 """, unsafe_allow_html=True)
 
-# ── Config ────────────────────────────────────────────────────────────────────
+# ── Constants ─────────────────────────────────────────────────────────────────
 
 SEV_ORDER  = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"]
-SEV_COLOUR = {"CRITICAL": "#d62728", "HIGH": "#ff7f0e", "MEDIUM": "#e6c200",
-              "LOW": "#2ca02c", "INFO": "#aec7e8"}
-SEV_TINT   = {"CRITICAL": "#fff5f5", "HIGH": "#fff8f0", "MEDIUM": "#fffdf0",
-              "LOW": "#f0fff0", "INFO": "#f0f6ff"}
-SEV_EMOJI  = {"CRITICAL": "🔴", "HIGH": "🟠", "MEDIUM": "🟡", "LOW": "🟢", "INFO": "⚪"}
+SEV_COLOUR = {"CRITICAL":"#d62728","HIGH":"#ff7f0e","MEDIUM":"#e6c200","LOW":"#2ca02c","INFO":"#aec7e8"}
+SEV_TINT   = {"CRITICAL":"#fff5f5","HIGH":"#fff8f0","MEDIUM":"#fffdf0","LOW":"#f0fff0","INFO":"#f0f6ff"}
+SEV_EMOJI  = {"CRITICAL":"🔴","HIGH":"🟠","MEDIUM":"🟡","LOW":"🟢","INFO":"⚪"}
+
+# Workers to exclude from all staff views (not real staff)
+EXCLUDED_WORKERS = {"(team)", "(unassigned)"}
 
 PLAIN_LABELS = {
     "NO CLOCK-IN":                              "Didn't clock in",
@@ -118,38 +94,95 @@ PLAIN_LABELS = {
     "FORM FREQUENCY -- NICOLE":                 "Nicole weekly form quota not met",
 }
 
+REQUIRED_DOCS = [
+    "NDIS Worker Screening",
+    "Working With Children Check",
+    "Police Check",
+    "First Aid Certificate",
+    "CPR Certificate",
+    "Manual Handling Training",
+]
+
 def plain(cat):
     return PLAIN_LABELS.get(cat, cat.title())
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
+def parse_issue_date(date_str):
+    """Parse issue date strings like 'Tue 26-May' or '2026-06-02' into a date."""
+    today = datetime.date.today()
+    for fmt in ["%Y-%m-%d", "%a %d-%b"]:
+        try:
+            d = datetime.datetime.strptime(date_str.strip(), fmt).date()
+            if fmt == "%a %d-%b":
+                d = d.replace(year=today.year)
+                if d > today + datetime.timedelta(days=30):
+                    d = d.replace(year=today.year - 1)
+            return d
+        except Exception:
+            continue
+    return None
+
 def compliance_score(worker_df):
-    """0–100 score. Deducts per issue severity. Red <60, amber 60–79, green ≥80."""
     deductions = {"CRITICAL": 15, "HIGH": 8, "MEDIUM": 3, "LOW": 1}
     total = worker_df["Severity"].map(deductions).fillna(0).sum()
     return max(0, 100 - int(total))
 
-def score_colour(score):
-    if score >= 80: return "#2ca02c"
-    if score >= 60: return "#ff7f0e"
-    return "#d62728"
+def score_colour(s):
+    return "#2ca02c" if s >= 80 else "#ff7f0e" if s >= 60 else "#d62728"
 
-def score_label(score):
-    if score >= 80: return "Good"
-    if score >= 60: return "Needs Attention"
-    return "At Risk"
-
-def to_excel(dfs: dict) -> bytes:
-    """Export a dict of {sheet_name: dataframe} to Excel bytes."""
-    buf = io.BytesIO()
-    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-        for sheet, df in dfs.items():
-            df.to_excel(writer, sheet_name=sheet[:31], index=False)
-    return buf.getvalue()
+def score_label(s):
+    return "Good" if s >= 80 else "Needs Attention" if s >= 60 else "At Risk"
 
 def colour_row(row):
     tint = SEV_TINT.get(row["Severity"], "#ffffff")
-    return [f"background-color: {tint}"] * len(row)
+    return [f"background-color:{tint}"] * len(row)
+
+def to_excel(dfs: dict) -> bytes:
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as w:
+        for sheet, df in dfs.items():
+            df.to_excel(w, sheet_name=sheet[:31], index=False)
+    return buf.getvalue()
+
+def pay_cycles(today):
+    """Returns list of (label, start_date, end_date) for current and previous pay cycles."""
+    y, m = today.year, today.month
+    last = calendar.monthrange(y, m)[1]
+    mn   = today.strftime("%b %Y")
+
+    cycles = [
+        (f"Pay Cycle 1 — 1–15 {mn}",    datetime.date(y, m, 1),  datetime.date(y, m, 15)),
+        (f"Pay Cycle 2 — 16–{last} {mn}", datetime.date(y, m, 16), datetime.date(y, m, last)),
+    ]
+
+    # Previous month cycles
+    pm = m - 1 if m > 1 else 12
+    py = y if m > 1 else y - 1
+    plast = calendar.monthrange(py, pm)[1]
+    pmn   = datetime.date(py, pm, 1).strftime("%b %Y")
+    cycles += [
+        (f"Pay Cycle 1 — 1–15 {pmn}",     datetime.date(py, pm, 1),  datetime.date(py, pm, 15)),
+        (f"Pay Cycle 2 — 16–{plast} {pmn}", datetime.date(py, pm, 16), datetime.date(py, pm, plast)),
+    ]
+    return cycles
+
+def doc_status(expiry_str):
+    """Returns (emoji, label, colour) for a document expiry date string."""
+    if not expiry_str or str(expiry_str).strip() in ("", "nan", "None"):
+        return "❌", "Missing", "#d62728"
+    try:
+        exp = datetime.date.fromisoformat(str(expiry_str).strip())
+        today = datetime.date.today()
+        days_left = (exp - today).days
+        if days_left < 0:
+            return "❌", f"Expired {abs(days_left)}d ago", "#d62728"
+        elif days_left <= 60:
+            return "⚠️", f"Expires in {days_left}d", "#ff7f0e"
+        else:
+            return "✅", f"Valid ({exp.strftime('%d %b %Y')})", "#2ca02c"
+    except Exception:
+        return "❓", "Invalid date", "#888"
 
 # ── Password gate ─────────────────────────────────────────────────────────────
 
@@ -178,27 +211,35 @@ def load_audit(days_back: int):
     return issues, fetched_at
 
 @st.cache_data(ttl=300, show_spinner=False)
-def load_prev_audit(days_back: int):
-    """Runs audit for 2× the period to get previous-period count."""
+def load_prev_count(days_back: int):
     issues = run_audit(days_back * 2)
     return len(issues)
 
 @st.cache_data(ttl=600, show_spinner=False)
 def load_worker_contacts():
-    """Returns {full_name: {phone, email}} from Connecteam."""
     try:
         users = fetch_all_users()
-        contacts = {}
-        for u in users.values():
-            name = f"{u.get('firstName', '')} {u.get('lastName', '')}".strip()
-            if name:
-                contacts[name] = {
-                    "phone": u.get("phoneNumber") or u.get("phone") or "",
-                    "email": u.get("email") or "",
-                }
-        return contacts
+        return {
+            f"{u.get('firstName','')} {u.get('lastName','')}".strip(): {
+                "phone": u.get("phoneNumber") or u.get("phone") or "",
+                "email": u.get("email") or "",
+            }
+            for u in users.values()
+        }
     except Exception:
         return {}
+
+@st.cache_data(ttl=600, show_spinner=False)
+def load_staff_names():
+    try:
+        users = fetch_all_users()
+        return sorted(
+            f"{u.get('firstName','')} {u.get('lastName','')}".strip()
+            for u in users.values()
+            if u.get("firstName")
+        )
+    except Exception:
+        return []
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 
@@ -207,23 +248,29 @@ with st.sidebar:
     st.markdown("##### Compliance Dashboard")
     st.divider()
 
-    period_mode = st.radio("Audit period", ["Quick select", "Custom dates"], horizontal=True)
     today = datetime.date.today()
+    cycles = pay_cycles(today)
+    cycle_labels = [c[0] for c in cycles] + ["Custom dates"]
 
-    if period_mode == "Quick select":
-        days_back  = st.selectbox("Period", [7, 14, 30], index=0,
-                                  format_func=lambda d: f"Last {d} days",
-                                  label_visibility="collapsed")
-        start_date = today - datetime.timedelta(days=days_back)
-    else:
-        date_range = st.date_input("From / To",
-                                   value=(today - datetime.timedelta(days=7), today),
-                                   max_value=today, label_visibility="collapsed")
+    period_choice = st.selectbox("Audit period", cycle_labels)
+
+    if period_choice == "Custom dates":
+        date_range = st.date_input(
+            "From / To",
+            value=(today - datetime.timedelta(days=7), today),
+            max_value=today,
+            label_visibility="collapsed",
+        )
         if isinstance(date_range, (list, tuple)) and len(date_range) == 2:
-            start_date = date_range[0]
+            start_date, end_date = date_range
         else:
             start_date = date_range[0] if date_range else today - datetime.timedelta(days=7)
-        days_back = max((today - start_date).days, 1)
+            end_date = today
+    else:
+        _, start_date, end_date = next(c for c in cycles if c[0] == period_choice)
+
+    # Load enough history to cover the period
+    days_back = max((today - start_date).days + 1, 1)
 
     compare_prev = st.checkbox("Compare with previous period", value=False)
 
@@ -234,7 +281,7 @@ with st.sidebar:
 
     with st.spinner("Loading…"):
         all_issues, fetched_at = load_audit(days_back)
-        prev_total = load_prev_audit(days_back) if compare_prev else None
+        prev_total = load_prev_count(days_back) if compare_prev else None
 
     st.markdown(f"<small style='color:#888'>Last updated<br>{fetched_at}</small>",
                 unsafe_allow_html=True)
@@ -249,13 +296,24 @@ if not all_issues:
     st.success("✅ No compliance issues found for this period.")
     st.stop()
 
-df_all = pd.DataFrame([
+df_raw = pd.DataFrame([
     {"Severity": i.severity, "Category": i.category, "Issue": plain(i.category),
      "Worker": i.worker, "Client": i.client, "Date": i.date, "Detail": i.detail}
     for i in all_issues
 ])
-df_all["_rank"] = df_all["Severity"].map({s: idx for idx, s in enumerate(SEV_ORDER)})
+
+# Parse dates and filter to selected pay period
+df_raw["_parsed_date"] = df_raw["Date"].apply(parse_issue_date)
+df_all = df_raw[
+    (df_raw["_parsed_date"] >= start_date) &
+    (df_raw["_parsed_date"] <= end_date)
+].drop(columns="_parsed_date").copy()
+
+df_all["_rank"] = df_all["Severity"].map({s: i for i, s in enumerate(SEV_ORDER)})
 df_all = df_all.sort_values("_rank").drop(columns="_rank")
+
+# Staff-only dataframe (excludes team/unassigned pseudo-workers)
+df_staff = df_all[~df_all["Worker"].isin(EXCLUDED_WORKERS)].copy()
 
 counts     = df_all["Severity"].value_counts()
 n_critical = counts.get("CRITICAL", 0)
@@ -263,32 +321,19 @@ n_high     = counts.get("HIGH", 0)
 n_medium   = counts.get("MEDIUM", 0)
 n_total    = len(df_all)
 
-# Week-on-week deltas
-def delta_html(current, previous_total, days_back):
-    if previous_total is None:
-        return ""
-    prev = previous_total - n_total   # approx previous period count
-    diff = current - (prev * current / max(n_total, 1))
-    # simpler: just compare overall totals
-    return ""
-
-def period_delta_badge(current_count, prev_total):
-    """Returns HTML delta string comparing current vs estimated previous period."""
+def period_delta(count, prev_total):
     if prev_total is None:
         return ""
-    est_prev = prev_total - n_total
-    diff = current_count - round(est_prev * current_count / max(n_total, 1))
-    if diff > 0:
-        return f'<div class="metric-delta delta-up">▲ {diff} vs prev period</div>'
-    elif diff < 0:
-        return f'<div class="metric-delta delta-down">▼ {abs(diff)} vs prev period</div>'
-    else:
-        return f'<div class="metric-delta delta-same">— same as prev period</div>'
+    est_prev = prev_total - len(df_raw)
+    diff = count - round(est_prev * count / max(len(df_raw), 1))
+    if diff > 0:   return f'<div class="metric-delta delta-up">▲ {diff} vs prev</div>'
+    elif diff < 0: return f'<div class="metric-delta delta-down">▼ {abs(diff)} vs prev</div>'
+    else:          return f'<div class="metric-delta delta-same">— same as prev</div>'
 
 # ── Header ────────────────────────────────────────────────────────────────────
 
 st.markdown("## NDIS Compliance Audit")
-st.caption(f"{start_date.strftime('%d %b %Y')} – {today.strftime('%d %b %Y')}  ·  {n_total} issues found")
+st.caption(f"{start_date.strftime('%d %b %Y')} – {end_date.strftime('%d %b %Y')}  ·  {n_total} issues found")
 
 if n_critical > 0:
     st.markdown(
@@ -296,7 +341,6 @@ if n_critical > 0:
         f'require immediate attention — see the Action Required tab below.</div>',
         unsafe_allow_html=True)
 
-# Metric cards
 c1, c2, c3, c4 = st.columns(4)
 for col, cls, colour, label, count in [
     (c1, "critical", "#d62728", "🔴 Critical",     n_critical),
@@ -304,22 +348,22 @@ for col, cls, colour, label, count in [
     (c3, "medium",   "#b8980a", "🟡 Medium",        n_medium),
     (c4, "total",    "#4c78a8", "📋 Total Issues",  n_total),
 ]:
-    delta = period_delta_badge(count, prev_total)
     col.markdown(
         f'<div class="metric-card {cls}">'
         f'<div class="metric-number" style="color:{colour}">{count}</div>'
         f'<div class="metric-label">{label}</div>'
-        f'{delta}</div>',
+        f'{period_delta(count, prev_total)}</div>',
         unsafe_allow_html=True)
 
 st.markdown("<br>", unsafe_allow_html=True)
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
     "🚨  Action Required",
     "👤  By Worker",
     "👥  By Client",
+    "📄  Documents",
     "📋  All Issues",
     "📥  Export",
 ])
@@ -333,34 +377,29 @@ with tab1:
     urgent = df_all[df_all["Severity"].isin(["CRITICAL", "HIGH"])].copy()
 
     if urgent.empty:
-        st.success("✅ No critical or high priority issues.")
+        st.success("✅ No critical or high priority issues for this period.")
     else:
         summary = (urgent.groupby(["Severity", "Issue"]).size()
                    .reset_index(name="Count"))
         summary["_rank"] = summary["Severity"].map({s: i for i, s in enumerate(SEV_ORDER)})
         summary = summary.sort_values(["_rank", "Count"], ascending=[True, False]).drop(columns="_rank")
-
         for _, row in summary.iterrows():
-            colour = SEV_COLOUR[row["Severity"]]
-            tint   = SEV_TINT[row["Severity"]]
-            emoji  = SEV_EMOJI[row["Severity"]]
+            c = SEV_COLOUR[row["Severity"]]; t = SEV_TINT[row["Severity"]]; e = SEV_EMOJI[row["Severity"]]
             st.markdown(
-                f'<div style="background:{tint};border-left:4px solid {colour};'
-                f'border-radius:8px;padding:0.7rem 1rem;margin-bottom:0.5rem;'
-                f'display:flex;justify-content:space-between;align-items:center;">'
-                f'<span>{emoji} <strong>{row["Issue"]}</strong></span>'
-                f'<span style="background:{colour};color:white;border-radius:20px;'
+                f'<div style="background:{t};border-left:4px solid {c};border-radius:8px;'
+                f'padding:0.7rem 1rem;margin-bottom:0.5rem;display:flex;'
+                f'justify-content:space-between;align-items:center;">'
+                f'<span>{e} <strong>{row["Issue"]}</strong></span>'
+                f'<span style="background:{c};color:white;border-radius:20px;'
                 f'padding:2px 12px;font-size:0.85rem;font-weight:600;">'
-                f'{row["Count"]} case{"s" if row["Count"] > 1 else ""}</span></div>',
+                f'{row["Count"]} case{"s" if row["Count"]>1 else ""}</span></div>',
                 unsafe_allow_html=True)
 
     late_inc = df_all[df_all["Category"] == "LATE INCIDENT REPORTING"]
     if not late_inc.empty:
         st.markdown('<div class="section-title">⚠️ Late Incident Reports — NDIS Commission Risk</div>',
                     unsafe_allow_html=True)
-        st.warning(
-            f"{len(late_inc)} incident report(s) were filed late. "
-            "NDIS requires serious incidents within 24 hours. Review these urgently.")
+        st.warning(f"{len(late_inc)} incident report(s) filed late. NDIS requires serious incidents within 24 hours.")
         for _, row in late_inc.iterrows():
             st.markdown(f"- **{row['Worker']}** · {row['Detail']}")
 
@@ -368,9 +407,7 @@ with tab1:
     if not restrict.empty:
         st.markdown('<div class="section-title">🚫 Restrictive Practice — Authorisation Required</div>',
                     unsafe_allow_html=True)
-        st.error(
-            f"{len(restrict)} note(s) mention restrictive practice. "
-            "Formal authorisation documentation is required under NDIS rules.")
+        st.error(f"{len(restrict)} note(s) mention restrictive practice. Formal authorisation required.")
         for _, row in restrict.iterrows():
             st.markdown(f"- **{row['Worker']}** · {row['Client']} · {row['Date']}")
 
@@ -378,184 +415,242 @@ with tab1:
 # TAB 2 — By Worker
 # ─────────────────────────────────────────────────
 with tab2:
-    st.markdown('<div class="section-title">Worker Compliance Scores</div>',
-                unsafe_allow_html=True)
-    st.caption("Score starts at 100. Deducts 15 per Critical, 8 per High, 3 per Medium, 1 per Low.")
+    st.markdown('<div class="section-title">Worker Compliance Scores</div>', unsafe_allow_html=True)
+    st.caption("Score starts at 100. Deducts 15 per Critical · 8 per High · 3 per Medium · 1 per Low.")
 
-    workers_df = df_all[df_all["Worker"] != "(team)"]
-    worker_summary = (workers_df.groupby(["Worker", "Severity"]).size()
-                      .unstack(fill_value=0))
-    for col in SEV_ORDER:
-        if col not in worker_summary.columns:
-            worker_summary[col] = 0
-    worker_summary = worker_summary[[c for c in SEV_ORDER if c in worker_summary.columns]]
-    worker_summary["Total"] = worker_summary.sum(axis=1)
-    worker_summary["Score"] = [
-        compliance_score(workers_df[workers_df["Worker"] == w])
-        for w in worker_summary.index
-    ]
-    worker_summary["Status"] = worker_summary["Score"].apply(score_label)
-    worker_summary = worker_summary.sort_values("Score", ascending=True)
+    if df_staff.empty:
+        st.info("No staff issues recorded for this period.")
+    else:
+        wsummary = (df_staff.groupby(["Worker", "Severity"]).size().unstack(fill_value=0))
+        for col in SEV_ORDER:
+            if col not in wsummary.columns: wsummary[col] = 0
+        wsummary = wsummary[[c for c in SEV_ORDER if c in wsummary.columns]]
+        wsummary["Total"] = wsummary.sum(axis=1)
+        wsummary["Score"] = [compliance_score(df_staff[df_staff["Worker"] == w]) for w in wsummary.index]
+        wsummary["Status"] = wsummary["Score"].apply(score_label)
+        wsummary = wsummary.sort_values("Score", ascending=True)
 
-    st.dataframe(
-        worker_summary,
-        use_container_width=True,
-        column_config={
+        st.dataframe(wsummary, use_container_width=True, column_config={
             "CRITICAL": st.column_config.NumberColumn("🔴 Critical"),
             "HIGH":     st.column_config.NumberColumn("🟠 High"),
             "MEDIUM":   st.column_config.NumberColumn("🟡 Medium"),
             "LOW":      st.column_config.NumberColumn("🟢 Low"),
             "Total":    st.column_config.NumberColumn("Total Issues"),
-            "Score":    st.column_config.ProgressColumn(
-                            "Compliance Score", min_value=0, max_value=100,
-                            format="%d%%"),
+            "Score":    st.column_config.ProgressColumn("Compliance Score", min_value=0, max_value=100, format="%d%%"),
             "Status":   st.column_config.TextColumn("Status"),
-        },
-    )
+        })
 
-    st.markdown('<div class="section-title">Drill Into a Worker</div>',
-                unsafe_allow_html=True)
+        st.markdown('<div class="section-title">Drill Into a Worker</div>', unsafe_allow_html=True)
+        workers_list = sorted(df_staff["Worker"].unique())
+        selected_worker = st.selectbox("Select worker", ["— pick a worker —"] + workers_list)
 
-    workers_list = sorted(workers_df["Worker"].unique())
-    selected_worker = st.selectbox("Select worker", ["— pick a worker —"] + workers_list,
-                                   key="worker_select")
+        if selected_worker != "— pick a worker —":
+            score = compliance_score(df_staff[df_staff["Worker"] == selected_worker])
+            sc = score_colour(score); sl = score_label(score)
 
-    if selected_worker != "— pick a worker —":
-        score = compliance_score(workers_df[workers_df["Worker"] == selected_worker])
-        sc    = score_colour(score)
-        sl    = score_label(score)
-
-        # Score badge + contact details side by side
-        col_score, col_contact = st.columns([1, 2])
-
-        with col_score:
-            st.markdown(
-                f'<div style="text-align:center;padding:1rem;">'
-                f'<div style="font-size:3rem;font-weight:700;color:{sc}">{score}</div>'
-                f'<div style="font-size:0.9rem;color:{sc};font-weight:600">{sl}</div>'
-                f'<div style="font-size:0.75rem;color:#888;margin-top:0.3rem">Compliance Score</div>'
-                f'</div>', unsafe_allow_html=True)
-
-        with col_contact:
-            with st.spinner("Loading contact…"):
+            col_score, col_contact = st.columns([1, 2])
+            with col_score:
+                st.markdown(
+                    f'<div style="text-align:center;padding:1rem;">'
+                    f'<div style="font-size:3rem;font-weight:700;color:{sc}">{score}</div>'
+                    f'<div style="font-size:0.9rem;color:{sc};font-weight:600">{sl}</div>'
+                    f'<div style="font-size:0.75rem;color:#888;margin-top:0.3rem">Compliance Score</div>'
+                    f'</div>', unsafe_allow_html=True)
+            with col_contact:
                 contacts = load_worker_contacts()
-            info = contacts.get(selected_worker, {})
-            phone = info.get("phone", "")
-            email = info.get("email", "")
-            st.markdown('<div style="margin-top:0.8rem">', unsafe_allow_html=True)
-            if phone:
-                st.markdown(f"📞 **Phone:** [{phone}](tel:{phone})")
-            else:
-                st.markdown("📞 **Phone:** _not on file_")
-            if email:
-                st.markdown(f"✉️ **Email:** [{email}](mailto:{email})")
-            else:
-                st.markdown("✉️ **Email:** _not on file_")
-            st.markdown('</div>', unsafe_allow_html=True)
+                info = contacts.get(selected_worker, {})
+                phone = info.get("phone", ""); email = info.get("email", "")
+                st.markdown("<br>", unsafe_allow_html=True)
+                st.markdown(f"📞 **Phone:** {'['+phone+'](tel:'+phone+')' if phone else '_not on file_'}")
+                st.markdown(f"✉️ **Email:** {'['+email+'](mailto:'+email+')' if email else '_not on file_'}")
 
-        st.markdown("<br>", unsafe_allow_html=True)
-        wdf = workers_df[workers_df["Worker"] == selected_worker][
-            ["Severity", "Issue", "Client", "Date", "Detail"]]
-        st.dataframe(wdf.style.apply(colour_row, axis=1),
-                     use_container_width=True, hide_index=True)
+            st.markdown("<br>", unsafe_allow_html=True)
+            wdf = df_staff[df_staff["Worker"] == selected_worker][["Severity","Issue","Client","Date","Detail"]]
+            st.dataframe(wdf.style.apply(colour_row, axis=1), use_container_width=True, hide_index=True)
 
 # ─────────────────────────────────────────────────
 # TAB 3 — By Client
 # ─────────────────────────────────────────────────
 with tab3:
-    st.markdown('<div class="section-title">Client Issue Summary</div>',
-                unsafe_allow_html=True)
+    st.markdown('<div class="section-title">Client Issue Summary</div>', unsafe_allow_html=True)
 
-    client_summary = (df_all.groupby(["Client", "Severity"]).size()
-                      .unstack(fill_value=0))
+    csummary = (df_all.groupby(["Client","Severity"]).size().unstack(fill_value=0))
     for col in SEV_ORDER:
-        if col not in client_summary.columns:
-            client_summary[col] = 0
-    client_summary = client_summary[[c for c in SEV_ORDER if c in client_summary.columns]]
-    client_summary["Total"] = client_summary.sum(axis=1)
-    client_summary = client_summary.sort_values("CRITICAL", ascending=False)
+        if col not in csummary.columns: csummary[col] = 0
+    csummary = csummary[[c for c in SEV_ORDER if c in csummary.columns]]
+    csummary["Total"] = csummary.sum(axis=1)
+    csummary = csummary.sort_values("CRITICAL", ascending=False)
 
-    st.dataframe(
-        client_summary,
-        use_container_width=True,
-        column_config={
-            "CRITICAL": st.column_config.NumberColumn("🔴 Critical"),
-            "HIGH":     st.column_config.NumberColumn("🟠 High"),
-            "MEDIUM":   st.column_config.NumberColumn("🟡 Medium"),
-            "LOW":      st.column_config.NumberColumn("🟢 Low"),
-            "Total":    st.column_config.NumberColumn("Total"),
-        },
-    )
+    st.dataframe(csummary, use_container_width=True, column_config={
+        "CRITICAL": st.column_config.NumberColumn("🔴 Critical"),
+        "HIGH":     st.column_config.NumberColumn("🟠 High"),
+        "MEDIUM":   st.column_config.NumberColumn("🟡 Medium"),
+        "LOW":      st.column_config.NumberColumn("🟢 Low"),
+        "Total":    st.column_config.NumberColumn("Total"),
+    })
 
-    # Form completion rates per client
-    FORM_CATS = {
-        "Kallan Jordan":  ["MISSING FORM -- KALLAN"],
-        "Evan Gatt":      ["MISSING FORM -- EVAN"],
-        "Michael Lawrie": ["MISSING FORM -- MICHAEL"],
-        "Joshua Gatt":    ["FORM FREQUENCY -- JOSHUA"],
-        "Nada Haliem":    ["FORM FREQUENCY -- NADA"],
-        "John":           ["FORM FREQUENCY -- JOHN"],
-        "Nicole Loveless":["FORM FREQUENCY -- NICOLE"],
-    }
-
-    clients_with_forms = [c for c in FORM_CATS if c in df_all["Client"].unique() or
-                          any(df_all["Category"].str.contains(c.split()[0].lower(), case=False))]
-
-    if clients_with_forms or any(df_all["Category"].str.startswith("MISSING FORM") |
-                                  df_all["Category"].str.startswith("FORM FREQUENCY")):
-        st.markdown('<div class="section-title">Form Completion This Period</div>',
+    form_issues = df_all[df_all["Category"].str.startswith("MISSING FORM") |
+                         df_all["Category"].str.startswith("FORM FREQUENCY")]
+    if not form_issues.empty:
+        st.markdown('<div class="section-title">Form Completion This Period</div>', unsafe_allow_html=True)
+        fsummary = form_issues.groupby(["Client","Issue"]).size().reset_index(name="Missing Days")
+        for client_name, grp in fsummary.groupby("Client"):
+            st.markdown(f"**{client_name}**")
+            for _, frow in grp.iterrows():
+                total_days = max(df_all[df_all["Client"] == client_name]["Date"].nunique(), 1)
+                missing = frow["Missing Days"]
+                submitted = max(total_days - missing, 0)
+                pct = round(submitted / total_days * 100)
+                bar_col = "#2ca02c" if pct >= 80 else "#ff7f0e" if pct >= 50 else "#d62728"
+                st.markdown(
+                    f'<div style="margin-bottom:0.4rem">{frow["Issue"]} — '
+                    f'<strong style="color:{bar_col}">{pct}%</strong> '
+                    f'<span style="color:#888;font-size:0.8rem">({submitted}/{total_days} days)</span></div>',
                     unsafe_allow_html=True)
-        st.caption("Missing days = days where required forms were not submitted.")
 
-        form_issues = df_all[df_all["Category"].str.startswith("MISSING FORM") |
-                             df_all["Category"].str.startswith("FORM FREQUENCY")]
-
-        if not form_issues.empty:
-            form_summary = (form_issues.groupby(["Client", "Issue"])
-                            .size().reset_index(name="Missing Days"))
-            for client_name, grp in form_summary.groupby("Client"):
-                st.markdown(f"**{client_name}**")
-                for _, frow in grp.iterrows():
-                    total_days = df_all[df_all["Client"] == client_name]["Date"].nunique()
-                    missing    = frow["Missing Days"]
-                    submitted  = max(total_days - missing, 0)
-                    pct        = round(submitted / total_days * 100) if total_days > 0 else 0
-                    bar_col    = "#2ca02c" if pct >= 80 else "#ff7f0e" if pct >= 50 else "#d62728"
-                    st.markdown(
-                        f'<div style="margin-bottom:0.4rem">'
-                        f'<span style="font-size:0.85rem">{frow["Issue"]}</span> — '
-                        f'<strong style="color:{bar_col}">{pct}%</strong> '
-                        f'<span style="color:#888;font-size:0.8rem">({submitted}/{total_days} days)</span>'
-                        f'</div>',
-                        unsafe_allow_html=True)
-
-    st.markdown('<div class="section-title">Drill Into a Client</div>',
-                unsafe_allow_html=True)
-    clients_list = sorted(df_all["Client"].unique())
-    selected_client = st.selectbox("Select client", ["— pick a client —"] + clients_list,
-                                   key="client_select")
-
+    st.markdown('<div class="section-title">Drill Into a Client</div>', unsafe_allow_html=True)
+    selected_client = st.selectbox("Select client", ["— pick a client —"] + sorted(df_all["Client"].unique()))
     if selected_client != "— pick a client —":
-        cdf = df_all[df_all["Client"] == selected_client][
-            ["Severity", "Issue", "Worker", "Date", "Detail"]]
-        st.dataframe(cdf.style.apply(colour_row, axis=1),
-                     use_container_width=True, hide_index=True)
+        cdf = df_all[df_all["Client"] == selected_client][["Severity","Issue","Worker","Date","Detail"]]
+        st.dataframe(cdf.style.apply(colour_row, axis=1), use_container_width=True, hide_index=True)
 
 # ─────────────────────────────────────────────────
-# TAB 4 — All Issues
+# TAB 4 — Documents
 # ─────────────────────────────────────────────────
 with tab4:
+    st.markdown('<div class="section-title">Worker Document Tracker</div>', unsafe_allow_html=True)
+    st.caption("Track NDIS-required documents for each worker. ✅ Valid  ⚠️ Expiring within 60 days  ❌ Expired or missing")
+
+    # Load staff list from Connecteam (cached)
+    with st.spinner("Loading staff list…"):
+        staff_names = load_staff_names()
+
+    if not staff_names:
+        st.warning("Could not load staff list from Connecteam. Check your API key.")
+        st.stop()
+
+    # Initialise document data in session state
+    if "doc_data" not in st.session_state:
+        # Try to load from secrets (JSON string)
+        saved = st.secrets.get("DOCUMENTS_JSON", "")
+        if saved:
+            try:
+                st.session_state.doc_data = json.loads(saved)
+            except Exception:
+                st.session_state.doc_data = {}
+        else:
+            st.session_state.doc_data = {}
+
+    # Build editable dataframe
+    rows = []
+    for worker in staff_names:
+        row = {"Worker": worker}
+        for doc in REQUIRED_DOCS:
+            expiry = st.session_state.doc_data.get(worker, {}).get(doc, "")
+            row[doc] = expiry
+        rows.append(row)
+
+    doc_df = pd.DataFrame(rows)
+
+    st.markdown("**Enter or update expiry dates below (format: YYYY-MM-DD)**")
+    edited = st.data_editor(
+        doc_df,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Worker": st.column_config.TextColumn("Worker", disabled=True, width="medium"),
+            **{doc: st.column_config.TextColumn(doc, width="small") for doc in REQUIRED_DOCS}
+        },
+        key="doc_editor",
+    )
+
+    if st.button("💾  Save Changes", type="primary"):
+        new_data = {}
+        for _, row in edited.iterrows():
+            worker = row["Worker"]
+            new_data[worker] = {doc: str(row[doc]) if row[doc] else "" for doc in REQUIRED_DOCS}
+        st.session_state.doc_data = new_data
+        st.success("Saved for this session.")
+
+    # Status summary — highlight missing/expiring
+    st.markdown('<div class="section-title">Document Status Overview</div>', unsafe_allow_html=True)
+
+    alert_rows = []
+    for _, row in edited.iterrows():
+        for doc in REQUIRED_DOCS:
+            emoji, label, colour = doc_status(row[doc])
+            if emoji in ("❌", "⚠️"):
+                alert_rows.append({
+                    "Worker": row["Worker"],
+                    "Document": doc,
+                    "Status": f"{emoji} {label}",
+                    "_colour": colour,
+                })
+
+    if not alert_rows:
+        st.success("✅ All documents on file and valid.")
+    else:
+        alert_df = pd.DataFrame(alert_rows)
+        expired_count  = sum(1 for r in alert_rows if "❌" in r["Status"])
+        expiring_count = sum(1 for r in alert_rows if "⚠️" in r["Status"])
+        col_e, col_w = st.columns(2)
+        col_e.metric("❌ Expired / Missing", expired_count)
+        col_w.metric("⚠️ Expiring Soon (60 days)", expiring_count)
+        st.dataframe(alert_df[["Worker","Document","Status"]], use_container_width=True, hide_index=True)
+
+    # Export document tracker
+    st.markdown('<div class="section-title">Export & Save</div>', unsafe_allow_html=True)
+    st.markdown("Download the document tracker as Excel, or copy the JSON below to paste into Streamlit Secrets to save permanently.")
+
+    # Build full status table for export
+    export_rows = []
+    for _, row in edited.iterrows():
+        for doc in REQUIRED_DOCS:
+            emoji, label, _ = doc_status(row[doc])
+            export_rows.append({"Worker": row["Worker"], "Document": doc,
+                                 "Expiry Date": row[doc], "Status": f"{emoji} {label}"})
+    export_doc_df = pd.DataFrame(export_rows)
+
+    col_dl, col_json = st.columns(2)
+    with col_dl:
+        st.download_button(
+            "⬇️  Download Excel",
+            data=to_excel({"Document Tracker": export_doc_df}),
+            file_name=f"ConnectCare_Documents_{today.strftime('%d-%b-%Y')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True, type="primary",
+        )
+    with col_json:
+        json_str = json.dumps(st.session_state.doc_data, indent=2)
+        st.download_button(
+            "⬇️  Download JSON backup",
+            data=json_str,
+            file_name="documents_backup.json",
+            mime="application/json",
+            use_container_width=True,
+        )
+
+    with st.expander("How to save document data permanently"):
+        st.markdown("""
+1. Click **Download JSON backup** above
+2. Open [share.streamlit.io](https://share.streamlit.io) → your app → ⚙️ Settings → Secrets
+3. Add this line to your secrets:
+```
+DOCUMENTS_JSON = '<paste the JSON here on one line>'
+```
+4. Save — data will persist across sessions.
+        """)
+
+# ─────────────────────────────────────────────────
+# TAB 5 — All Issues
+# ─────────────────────────────────────────────────
+with tab5:
     st.markdown('<div class="section-title">All Issues</div>', unsafe_allow_html=True)
 
     fc1, fc2, fc3 = st.columns(3)
-    with fc1:
-        f_sev = st.multiselect("Severity", SEV_ORDER, default=SEV_ORDER)
-    with fc2:
-        f_worker = st.multiselect("Worker", sorted(df_all["Worker"].unique()),
-                                  placeholder="All workers")
-    with fc3:
-        f_client = st.multiselect("Client", sorted(df_all["Client"].unique()),
-                                  placeholder="All clients")
+    with fc1: f_sev = st.multiselect("Severity", SEV_ORDER, default=SEV_ORDER)
+    with fc2: f_worker = st.multiselect("Worker", sorted(df_all["Worker"].unique()), placeholder="All workers")
+    with fc3: f_client = st.multiselect("Client", sorted(df_all["Client"].unique()), placeholder="All clients")
 
     df_filtered = df_all.copy()
     if f_sev:    df_filtered = df_filtered[df_filtered["Severity"].isin(f_sev)]
@@ -563,74 +658,51 @@ with tab4:
     if f_client: df_filtered = df_filtered[df_filtered["Client"].isin(f_client)]
 
     st.caption(f"Showing {len(df_filtered)} of {n_total} issues")
-
-    display = df_filtered[["Severity", "Issue", "Worker", "Client", "Date", "Detail"]].copy()
-    st.dataframe(
-        display.style.apply(colour_row, axis=1),
-        use_container_width=True, height=600, hide_index=True,
-        column_config={
-            "Severity": st.column_config.TextColumn(width="small"),
-            "Issue":    st.column_config.TextColumn("Issue Type", width="medium"),
-            "Worker":   st.column_config.TextColumn(width="medium"),
-            "Client":   st.column_config.TextColumn(width="medium"),
-            "Date":     st.column_config.TextColumn(width="small"),
-            "Detail":   st.column_config.TextColumn(width="large"),
-        },
-    )
+    display = df_filtered[["Severity","Issue","Worker","Client","Date","Detail"]].copy()
+    st.dataframe(display.style.apply(colour_row, axis=1), use_container_width=True,
+                 height=600, hide_index=True, column_config={
+                     "Severity": st.column_config.TextColumn(width="small"),
+                     "Issue":    st.column_config.TextColumn("Issue Type", width="medium"),
+                     "Worker":   st.column_config.TextColumn(width="medium"),
+                     "Client":   st.column_config.TextColumn(width="medium"),
+                     "Date":     st.column_config.TextColumn(width="small"),
+                     "Detail":   st.column_config.TextColumn(width="large"),
+                 })
 
 # ─────────────────────────────────────────────────
-# TAB 5 — Export
+# TAB 6 — Export
 # ─────────────────────────────────────────────────
-with tab5:
+with tab6:
     st.markdown('<div class="section-title">Export Audit Data</div>', unsafe_allow_html=True)
-    st.markdown("Download the full audit for this period to share with your manager or attach as evidence.")
+    st.markdown("Download the full audit for this pay period to share with your manager or attach as evidence.")
 
-    period_label = f"{start_date.strftime('%d-%b-%Y')}_to_{today.strftime('%d-%b-%Y')}"
-
-    # Build worker summary for export
-    ws_export = worker_summary.reset_index()
-
-    # Build client summary for export
-    cs_export = client_summary.reset_index()
-
-    # Build all issues for export
-    export_df = df_all[["Severity", "Issue", "Worker", "Client", "Date", "Detail"]].copy()
-    export_df.rename(columns={"Issue": "Issue Type"}, inplace=True)
+    period_label = f"{start_date.strftime('%d-%b-%Y')}_to_{end_date.strftime('%d-%b-%Y')}"
+    export_issues = df_all[["Severity","Issue","Worker","Client","Date","Detail"]].copy()
+    export_issues.rename(columns={"Issue":"Issue Type"}, inplace=True)
+    ws_export = wsummary.reset_index() if not df_staff.empty else pd.DataFrame()
+    cs_export = csummary.reset_index()
 
     col_xl, col_csv = st.columns(2)
-
     with col_xl:
         st.markdown("#### Excel (.xlsx)")
         st.markdown("Three sheets: All Issues, Worker Summary, Client Summary.")
-        excel_bytes = to_excel({
-            "All Issues":      export_df,
-            "Worker Summary":  ws_export,
-            "Client Summary":  cs_export,
-        })
-        st.download_button(
-            label="⬇️  Download Excel",
-            data=excel_bytes,
-            file_name=f"ConnectCare_Audit_{period_label}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True,
-            type="primary",
-        )
-
+        sheets = {"All Issues": export_issues, "Client Summary": cs_export}
+        if not ws_export.empty: sheets["Worker Summary"] = ws_export
+        st.download_button("⬇️  Download Excel", data=to_excel(sheets),
+                           file_name=f"ConnectCare_Audit_{period_label}.xlsx",
+                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                           use_container_width=True, type="primary")
     with col_csv:
         st.markdown("#### CSV")
         st.markdown("All issues in a single CSV file.")
-        st.download_button(
-            label="⬇️  Download CSV",
-            data=export_df.to_csv(index=False),
-            file_name=f"ConnectCare_Audit_{period_label}.csv",
-            mime="text/csv",
-            use_container_width=True,
-        )
+        st.download_button("⬇️  Download CSV", data=export_issues.to_csv(index=False),
+                           file_name=f"ConnectCare_Audit_{period_label}.csv",
+                           mime="text/csv", use_container_width=True)
 
     st.divider()
-    st.markdown("**What's included in the export:**")
     st.markdown(f"""
-- **{len(export_df)} issues** across {export_df['Worker'].nunique()} workers and {export_df['Client'].nunique()} clients
-- Period: {start_date.strftime('%d %b %Y')} – {today.strftime('%d %b %Y')}
+**What's included:**
+- **{len(export_issues)} issues** · {export_issues['Worker'].nunique()} workers · {export_issues['Client'].nunique()} clients
+- Period: {start_date.strftime('%d %b %Y')} – {end_date.strftime('%d %b %Y')}
 - Generated: {fetched_at}
 """)
