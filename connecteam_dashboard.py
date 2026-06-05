@@ -203,12 +203,12 @@ def init_notifications():
         st.session_state.notifications = []
 
 def build_notify_message(worker_name, issues_df, period_label):
-    """Build a Connecteam chat message listing each issue specifically."""
+    """Build an urgent, personal-sounding message from a manager."""
     first = worker_name.split()[0]
     lines = [
         f"Hi {first},",
         "",
-        f"Your compliance issues from {period_label} are:",
+        f"From your shift {period_label} — I need you to fix these today:",
         "",
     ]
 
@@ -222,22 +222,20 @@ def build_notify_message(worker_name, issues_df, period_label):
             icon   = SEV_ICON.get(sev, "•")
             detail = str(row.get("Detail", "")).strip()
             client = str(row.get("Client", "")).strip()
-            # Truncate detail so line stays readable on mobile
             if len(detail) > 90:
                 detail = detail[:87] + "…"
-            lines.append(f"{icon} {client}: {detail}")
+            lines.append(f"{icon} {client} — {detail}")
             shown += 1
         if shown >= 8:
             break
 
     remaining = len(issues_df) - shown
     if remaining > 0:
-        lines.append(f"…and {remaining} more issue(s) not listed here.")
+        lines.append(f"(+ {remaining} more)")
 
     lines += [
         "",
-        "Please reply to this message once you have addressed these.",
-        "Connect Care",
+        "Reply here when done. Thanks",
     ]
     return "\n".join(lines)
 
