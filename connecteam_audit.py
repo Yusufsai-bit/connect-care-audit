@@ -288,6 +288,90 @@ def fetch_user_custom_fields():
         return []
 
 
+def fetch_task_boards():
+    """Fetch all task boards. Exported for dashboard use."""
+    try:
+        data   = ct_get("/tasks/v1/taskboards")
+        raw    = data.get("data") or {}
+        boards = raw.get("taskBoards", raw.get("boards", raw.get("items", [])))
+        if isinstance(boards, dict):
+            boards = list(boards.values())
+        return boards if isinstance(boards, list) else []
+    except Exception:
+        return []
+
+
+def ct_post(path, body):
+    """POST helper — returns (True, response_json) or (False, error_string)."""
+    try:
+        r = requests.post(
+            f"{BASE_URL}{path}",
+            headers={
+                "X-API-KEY":    CONNECTEAM_API_KEY,
+                "Accept":       "application/json",
+                "Content-Type": "application/json",
+            },
+            json=body,
+            timeout=30,
+        )
+        r.raise_for_status()
+        return True, r.json()
+    except requests.exceptions.HTTPError as e:
+        try:
+            detail = e.response.json()
+        except Exception:
+            detail = e.response.text
+        return False, f"HTTP {e.response.status_code}: {detail}"
+    except Exception as e:
+        return False, str(e)
+
+
+def send_worker_message(user_id, text):
+    """
+    Send a private Connecteam chat message to the given worker.
+    Returns (True, None) on success or (False, error_string) on failure.
+    """
+    ok, result = ct_post(
+        f"/chat/v1/conversations/privateMessage/{user_id}",
+        {"text": text[:1000]},
+    )
+    return ok, None if ok else result
+
+
+def add_worker_profile_note(user_id, text, title="Compliance Notification"):
+    """
+    Add a note to the worker's Connecteam HR profile.
+    Returns (True, note_id) on success or (False, error_string) on failure.
+    """
+    ok, result = ct_post(
+        f"/users/v1/users/{user_id}/notes",
+        {"text": text[:1000], "title": title},
+    )
+    if ok:
+        note_id = (result.get("data") or {}).get("id")
+        return True, note_id
+    return False, result
+
+
+def create_worker_task(task_board_id, user_id, title, description, due_ts=None):
+    """
+    Create a Connecteam task assigned to the worker as an acknowledgement request.
+    Returns (True, task_id) on success or (False, error_string) on failure.
+    """
+    body = {
+        "userIds": [int(user_id)],
+        "title":   title[:255],
+        "status":  "open",
+    }
+    if due_ts:
+        body["dueDate"] = int(due_ts)
+    ok, result = ct_post(f"/tasks/v1/taskboards/{task_board_id}/tasks", body)
+    if ok:
+        task_id = (result.get("data") or {}).get("taskId") or (result.get("data") or {}).get("id")
+        return True, task_id
+    return False, result
+
+
 # ---------------------------------------------
 # HELPERS
 # ---------------------------------------------
