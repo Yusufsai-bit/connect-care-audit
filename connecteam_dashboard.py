@@ -18,7 +18,11 @@ if _ct_key:
 if _ai_key:
     os.environ["ANTHROPIC_API_KEY"] = _ai_key
 
-from connecteam_audit import run_audit, fetch_all_users, fetch_user_custom_fields
+from connecteam_audit import (
+    run_audit, fetch_all_users, fetch_user_custom_fields,
+    send_worker_message, add_worker_profile_note,
+    create_worker_task, fetch_task_boards,
+)
 
 # ── Page config ───────────────────────────────────────────────────────────────
 
@@ -190,6 +194,67 @@ def doc_status(expiry_str):
     except Exception:
         return "❓", "Invalid date", "#888"
 
+# ── Notification helpers ──────────────────────────────────────────────────────
+
+import uuid as _uuid
+
+def init_notifications():
+    if "notifications" not in st.session_state:
+        st.session_state.notifications = []
+
+def build_notify_message(worker_name, issues_df, period_label):
+    """Build a Connecteam chat message summarising a worker's open issues."""
+    lines = [
+        f"Hi {worker_name.split()[0]},",
+        "",
+        "This is a compliance notification from Connect Care Services.",
+        f"Audit period: {period_label}",
+        "",
+        "Issues identified on your account:",
+    ]
+    shown = 0
+    for sev in ["CRITICAL", "HIGH", "MEDIUM", "LOW"]:
+        rows = issues_df[issues_df["Severity"] == sev]
+        for _, row in rows.iterrows():
+            if shown >= 6:
+                remaining = len(issues_df) - shown
+                lines.append(f"  …and {remaining} more issue(s).")
+                break
+            emoji = SEV_EMOJI.get(sev, "•")
+            lines.append(f"  {emoji} [{sev}] {row['Issue']} — {row['Client']}")
+            shown += 1
+        if shown >= 6:
+            break
+    lines += [
+        "",
+        "Please review and reply to confirm you have addressed these items.",
+        "",
+        "Connect Care Compliance Team",
+    ]
+    return "\n".join(lines)
+
+def log_notification(worker_name, worker_id, issues_df, message_text, period_label,
+                     task_id=None, profile_note_added=False):
+    init_notifications()
+    sev_counts = issues_df["Severity"].value_counts().to_dict()
+    st.session_state.notifications.insert(0, {
+        "id":                 str(_uuid.uuid4())[:8],
+        "worker":             worker_name,
+        "worker_id":          worker_id,
+        "sent_at":            datetime.datetime.now().strftime("%d %b %Y, %I:%M %p"),
+        "period":             period_label,
+        "severity_counts":    sev_counts,
+        "issue_count":        len(issues_df),
+        "issues":             issues_df[["Severity","Issue","Client","Date","Detail"]].to_dict("records"),
+        "message_sent":       message_text,
+        "status":             "Sent",
+        "acknowledged_at":    None,
+        "resolved_at":        None,
+        "manager_notes":      "",
+        "task_id":            task_id,
+        "profile_note_added": profile_note_added,
+    })
+
 # ── Password gate ─────────────────────────────────────────────────────────────
 
 if not st.session_state.get("authenticated"):
@@ -227,10 +292,22 @@ def load_worker_contacts():
         users = fetch_all_users()
         return {
             f"{u.get('firstName','')} {u.get('lastName','')}".strip(): {
-                "phone": u.get("phoneNumber") or u.get("phone") or "",
-                "email": u.get("email") or "",
+                "phone":  u.get("phoneNumber") or u.get("phone") or "",
+                "email":  u.get("email") or "",
+                "userId": u.get("userId"),
             }
             for u in users.values()
+        }
+    except Exception:
+        return {}
+
+@st.cache_data(ttl=600, show_spinner=False)
+def load_task_boards():
+    try:
+        boards = fetch_task_boards()
+        return {
+            b.get("name", f"Board {b.get('taskBoardId','?')}"): b.get("taskBoardId") or b.get("id")
+            for b in boards if (b.get("taskBoardId") or b.get("id"))
         }
     except Exception:
         return {}
@@ -427,13 +504,16 @@ st.markdown("<br>", unsafe_allow_html=True)
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
 
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+init_notifications()
+
+tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
     "🚨  Action Required",
     "👤  By Worker",
     "👥  By Client",
     "📄  Documents",
     "📋  All Issues",
     "📥  Export",
+    "📬  Notifications",
 ])
 
 # ─────────────────────────────────────────────────
@@ -563,6 +643,101 @@ with tab2:
             st.markdown("<br>", unsafe_allow_html=True)
             wdf = df_staff[df_staff["Worker"] == selected_worker][["Severity","Issue","Client","Date","Detail"]]
             st.dataframe(wdf.style.apply(colour_row, axis=1), use_container_width=True, hide_index=True)
+
+            # ── Notify this worker ──────────────────────────────────────────
+            st.markdown('<div class="section-title">📩 Notify This Worker</div>', unsafe_allow_html=True)
+            contacts       = load_worker_contacts()
+            worker_info    = contacts.get(selected_worker, {})
+            worker_user_id = worker_info.get("userId")
+
+            if not worker_user_id:
+                st.warning("Could not find Connecteam user ID for this worker.")
+            else:
+                period_label_str = f"{start_date.strftime('%d %b')} – {end_date.strftime('%d %b %Y')}"
+                default_msg      = build_notify_message(selected_worker, wdf, period_label_str)
+
+                with st.expander("Compose & send message", expanded=False):
+                    edited_msg = st.text_area(
+                        "Message to send via Connecteam chat",
+                        value=default_msg,
+                        height=260,
+                        key=f"msg_{selected_worker}",
+                    )
+
+                    col_opt1, col_opt2 = st.columns(2)
+                    with col_opt1:
+                        add_profile_note = st.checkbox(
+                            "Add note to worker's HR profile",
+                            value=True,
+                            help="Logs a compliance note on the worker's Connecteam profile as a permanent record.",
+                        )
+                    with col_opt2:
+                        create_task_opt = st.checkbox(
+                            "Create acknowledgement task",
+                            value=False,
+                            help="Creates a Connecteam task assigned to the worker so they can mark it complete.",
+                        )
+
+                    task_board_id = None
+                    if create_task_opt:
+                        boards = load_task_boards()
+                        if boards:
+                            board_name = st.selectbox("Task board", list(boards.keys()))
+                            task_board_id = boards[board_name]
+                        else:
+                            st.info("No task boards found. Create one in Connecteam first.")
+                            create_task_opt = False
+
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    if st.button("📤  Send Now", type="primary", key=f"send_{selected_worker}"):
+                        errors = []
+
+                        # 1. Send chat message
+                        ok, err = send_worker_message(worker_user_id, edited_msg)
+                        if not ok:
+                            errors.append(f"Chat message failed: {err}")
+
+                        # 2. Add HR profile note
+                        note_ok = False
+                        if add_profile_note:
+                            note_ok, note_err = add_worker_profile_note(
+                                worker_user_id,
+                                f"Compliance notification sent {datetime.datetime.now().strftime('%d %b %Y')}.\n"
+                                f"Period: {period_label_str}. Issues: {len(wdf)}.",
+                                title="Compliance Notification",
+                            )
+                            if not note_ok:
+                                errors.append(f"Profile note failed: {note_err}")
+
+                        # 3. Create acknowledgement task
+                        task_id = None
+                        if create_task_opt and task_board_id:
+                            task_ok, task_result = create_worker_task(
+                                task_board_id,
+                                worker_user_id,
+                                f"Compliance issues — {period_label_str}",
+                                f"Review and acknowledge {len(wdf)} compliance item(s). Reply to your manager when done.",
+                                due_ts=int((datetime.datetime.now() + datetime.timedelta(days=3)).timestamp()),
+                            )
+                            if task_ok:
+                                task_id = task_result
+                            else:
+                                errors.append(f"Task creation failed: {task_result}")
+
+                        # Log it
+                        if ok:
+                            log_notification(
+                                selected_worker, worker_user_id, wdf,
+                                edited_msg, period_label_str,
+                                task_id=task_id,
+                                profile_note_added=note_ok,
+                            )
+                            if errors:
+                                st.warning("Message sent, but some options failed: " + " | ".join(errors))
+                            else:
+                                st.success(f"✅ Message sent to {selected_worker} via Connecteam. Logged in the Notifications tab.")
+                        else:
+                            st.error("Failed to send: " + " | ".join(errors))
 
     # Onboarding status section
     onboarding_issues = df_all[df_all["Category"] == "ONBOARDING INCOMPLETE"]
@@ -846,3 +1021,215 @@ with tab6:
 - Period: {start_date.strftime('%d %b %Y')} – {end_date.strftime('%d %b %Y')}
 - Generated: {fetched_at}
 """)
+
+# ─────────────────────────────────────────────────
+# TAB 7 — Notifications
+# ─────────────────────────────────────────────────
+with tab7:
+    st.markdown('<div class="section-title">Worker Notifications & Acknowledgements</div>',
+                unsafe_allow_html=True)
+    st.caption("Send compliance notifications to workers via Connecteam chat. Track when they acknowledge and resolve each issue.")
+
+    notifs = st.session_state.get("notifications", [])
+
+    # ── Status summary ────────────────────────────────────────────────────────
+    n_sent  = sum(1 for n in notifs if n["status"] == "Sent")
+    n_ack   = sum(1 for n in notifs if n["status"] == "Acknowledged")
+    n_res   = sum(1 for n in notifs if n["status"] == "Resolved")
+    mc1, mc2, mc3, mc4 = st.columns(4)
+    mc1.metric("📤 Total Sent",    len(notifs))
+    mc2.metric("📬 Awaiting Reply", n_sent)
+    mc3.metric("✅ Acknowledged",  n_ack)
+    mc4.metric("🏁 Resolved",      n_res)
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # ── Bulk Notify section ───────────────────────────────────────────────────
+    with st.expander("📢 Bulk Notify — send to multiple workers at once"):
+        st.markdown("Select workers and send them all notifications about their HIGH/CRITICAL issues.")
+        contacts = load_worker_contacts()
+
+        workers_with_issues = (
+            df_staff[df_staff["Severity"].isin(["CRITICAL","HIGH"])]
+            ["Worker"].unique().tolist()
+        )
+        already_sent_this_period = {
+            n["worker"] for n in notifs
+            if n.get("period", "") == f"{start_date.strftime('%d %b')} – {end_date.strftime('%d %b %Y')}"
+        }
+
+        bulk_workers = st.multiselect(
+            "Workers to notify",
+            options=sorted(workers_with_issues),
+            default=[w for w in sorted(workers_with_issues) if w not in already_sent_this_period],
+            help="Pre-selected workers have not yet been notified this period.",
+        )
+
+        period_label_bulk = f"{start_date.strftime('%d %b')} – {end_date.strftime('%d %b %Y')}"
+
+        if bulk_workers:
+            st.caption(f"Will send {len(bulk_workers)} message(s). Each worker gets a personalised message listing only their own issues.")
+            if st.button("📤  Send to All Selected", type="primary"):
+                sent_ok, sent_fail = [], []
+                for wname in bulk_workers:
+                    winfo = contacts.get(wname, {})
+                    wid   = winfo.get("userId")
+                    if not wid:
+                        sent_fail.append(f"{wname} (no user ID)")
+                        continue
+                    wdf = df_staff[
+                        (df_staff["Worker"] == wname) &
+                        (df_staff["Severity"].isin(["CRITICAL","HIGH"]))
+                    ][["Severity","Issue","Client","Date","Detail"]]
+                    msg = build_notify_message(wname, wdf, period_label_bulk)
+                    ok, err = send_worker_message(wid, msg)
+                    if ok:
+                        log_notification(wname, wid, wdf, msg, period_label_bulk)
+                        sent_ok.append(wname)
+                    else:
+                        sent_fail.append(f"{wname} ({err})")
+                if sent_ok:
+                    st.success(f"Sent to: {', '.join(sent_ok)}")
+                if sent_fail:
+                    st.error(f"Failed: {', '.join(sent_fail)}")
+                if sent_ok:
+                    st.rerun()
+
+    st.divider()
+
+    # ── Notification history ──────────────────────────────────────────────────
+    if not notifs:
+        st.info("No notifications sent yet. Use the 👤 By Worker tab to notify individual workers, or the Bulk Notify section above.")
+    else:
+        f_status = st.selectbox("Filter by status", ["All", "Sent", "Acknowledged", "Resolved"])
+        filtered_notifs = notifs if f_status == "All" else [n for n in notifs if n["status"] == f_status]
+
+        st.caption(f"Showing {len(filtered_notifs)} of {len(notifs)} notifications")
+
+        STATUS_COLOUR = {"Sent": "#ff7f0e", "Acknowledged": "#4c78a8", "Resolved": "#2ca02c"}
+
+        for idx, n in enumerate(filtered_notifs):
+            sc = STATUS_COLOUR.get(n["status"], "#888")
+            crit = n["severity_counts"].get("CRITICAL", 0)
+            high = n["severity_counts"].get("HIGH", 0)
+            med  = n["severity_counts"].get("MEDIUM", 0)
+
+            with st.expander(
+                f"**{n['worker']}** · {n['sent_at']} · "
+                f"{'🔴 ' + str(crit) + ' Critical  ' if crit else ''}"
+                f"{'🟠 ' + str(high) + ' High  ' if high else ''}"
+                f"{'🟡 ' + str(med) + ' Medium  ' if med else ''}"
+                f"· Status: **{n['status']}**",
+                expanded=False,
+            ):
+                st.markdown(
+                    f'<span style="background:{sc};color:white;border-radius:12px;'
+                    f'padding:2px 12px;font-size:0.85rem;font-weight:600;">{n["status"]}</span>'
+                    f'  &nbsp; Period: {n["period"]}  ·  {n["issue_count"]} issues',
+                    unsafe_allow_html=True,
+                )
+
+                col_iss, col_msg = st.columns([1, 1])
+
+                with col_iss:
+                    st.markdown("**Issues sent:**")
+                    for iss in n["issues"][:8]:
+                        e = SEV_EMOJI.get(iss["Severity"], "•")
+                        st.markdown(f"- {e} {iss['Issue']} — {iss['Client']}")
+                    if len(n["issues"]) > 8:
+                        st.caption(f"…and {len(n['issues']) - 8} more")
+
+                with col_msg:
+                    st.markdown("**Message sent:**")
+                    st.code(n["message_sent"], language=None)
+
+                # Extras
+                extras = []
+                if n.get("task_id"):
+                    extras.append(f"Task created (ID: {n['task_id']})")
+                if n.get("profile_note_added"):
+                    extras.append("Profile note added")
+                if extras:
+                    st.caption(" · ".join(extras))
+
+                st.markdown("<br>", unsafe_allow_html=True)
+
+                # Status update controls
+                act_col1, act_col2, act_col3 = st.columns(3)
+                real_idx = notifs.index(n)
+
+                with act_col1:
+                    if n["status"] != "Acknowledged" and st.button(
+                        "✅ Mark Acknowledged", key=f"ack_{n['id']}",
+                        help="Worker has confirmed they are aware of the issues."
+                    ):
+                        notifs[real_idx]["status"] = "Acknowledged"
+                        notifs[real_idx]["acknowledged_at"] = datetime.datetime.now().strftime("%d %b %Y, %I:%M %p")
+                        st.rerun()
+
+                with act_col2:
+                    if n["status"] != "Resolved" and st.button(
+                        "🏁 Mark Resolved", key=f"res_{n['id']}",
+                        help="All issues have been fixed. Closes this notification."
+                    ):
+                        notifs[real_idx]["status"] = "Resolved"
+                        notifs[real_idx]["resolved_at"] = datetime.datetime.now().strftime("%d %b %Y, %I:%M %p")
+                        if notifs[real_idx]["acknowledged_at"] is None:
+                            notifs[real_idx]["acknowledged_at"] = notifs[real_idx]["resolved_at"]
+                        st.rerun()
+
+                with act_col3:
+                    if not n.get("profile_note_added") and st.button(
+                        "📝 Add Profile Note", key=f"pnote_{n['id']}",
+                        help="Log this notification on the worker's Connecteam HR profile."
+                    ):
+                        note_ok, note_err = add_worker_profile_note(
+                            n["worker_id"],
+                            f"Compliance notification: {n['issue_count']} issues for {n['period']}. "
+                            f"Status: {n['status']}.",
+                            title="Compliance Notification",
+                        )
+                        if note_ok:
+                            notifs[real_idx]["profile_note_added"] = True
+                            st.success("Note added to profile.")
+                            st.rerun()
+                        else:
+                            st.error(f"Failed: {note_err}")
+
+                # Manager notes
+                note_key = f"note_{n['id']}"
+                new_note = st.text_input(
+                    "Manager notes",
+                    value=n.get("manager_notes", ""),
+                    placeholder="e.g. Worker called and confirmed, will fix next shift…",
+                    key=note_key,
+                )
+                if new_note != n.get("manager_notes", ""):
+                    notifs[real_idx]["manager_notes"] = new_note
+
+                if n.get("acknowledged_at"):
+                    st.caption(f"Acknowledged: {n['acknowledged_at']}")
+                if n.get("resolved_at"):
+                    st.caption(f"Resolved: {n['resolved_at']}")
+
+        st.divider()
+        # Export notification log
+        if notifs:
+            notif_export = pd.DataFrame([{
+                "Worker":         n["worker"],
+                "Sent At":        n["sent_at"],
+                "Period":         n["period"],
+                "Issues":         n["issue_count"],
+                "Status":         n["status"],
+                "Acknowledged":   n.get("acknowledged_at") or "",
+                "Resolved":       n.get("resolved_at") or "",
+                "Manager Notes":  n.get("manager_notes", ""),
+                "Profile Note":   "Yes" if n.get("profile_note_added") else "No",
+            } for n in notifs])
+            st.download_button(
+                "⬇️  Download Notification Log (Excel)",
+                data=to_excel({"Notifications": notif_export}),
+                file_name=f"ConnectCare_Notifications_{today.strftime('%d-%b-%Y')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=False,
+            )
