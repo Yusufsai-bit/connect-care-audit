@@ -203,33 +203,41 @@ def init_notifications():
         st.session_state.notifications = []
 
 def build_notify_message(worker_name, issues_df, period_label):
-    """Build a Connecteam chat message summarising a worker's open issues."""
+    """Build a Connecteam chat message listing each issue specifically."""
+    first = worker_name.split()[0]
     lines = [
-        f"Hi {worker_name.split()[0]},",
+        f"Hi {first},",
         "",
-        "This is a compliance notification from Connect Care Services.",
-        f"Audit period: {period_label}",
+        f"Your compliance issues from {period_label} are:",
         "",
-        "Issues identified on your account:",
     ]
+
+    SEV_ICON = {"CRITICAL": "🔴", "HIGH": "🟠", "MEDIUM": "🟡", "LOW": "🟢"}
     shown = 0
     for sev in ["CRITICAL", "HIGH", "MEDIUM", "LOW"]:
         rows = issues_df[issues_df["Severity"] == sev]
         for _, row in rows.iterrows():
-            if shown >= 6:
-                remaining = len(issues_df) - shown
-                lines.append(f"  …and {remaining} more issue(s).")
+            if shown >= 8:
                 break
-            emoji = SEV_EMOJI.get(sev, "•")
-            lines.append(f"  {emoji} [{sev}] {row['Issue']} — {row['Client']}")
+            icon   = SEV_ICON.get(sev, "•")
+            detail = str(row.get("Detail", "")).strip()
+            client = str(row.get("Client", "")).strip()
+            # Truncate detail so line stays readable on mobile
+            if len(detail) > 90:
+                detail = detail[:87] + "…"
+            lines.append(f"{icon} {client}: {detail}")
             shown += 1
-        if shown >= 6:
+        if shown >= 8:
             break
+
+    remaining = len(issues_df) - shown
+    if remaining > 0:
+        lines.append(f"…and {remaining} more issue(s) not listed here.")
+
     lines += [
         "",
-        "Please review and reply to confirm you have addressed these items.",
-        "",
-        "Connect Care Compliance Team",
+        "Please reply to this message once you have addressed these.",
+        "Connect Care",
     ]
     return "\n".join(lines)
 
@@ -393,9 +401,14 @@ with st.sidebar:
     st.markdown("##### Compliance Dashboard")
     st.divider()
 
-    today = datetime.date.today()
-    cycles = pay_cycles(today)
-    cycle_labels = [c[0] for c in cycles] + ["Custom dates"]
+    today     = datetime.date.today()
+    yesterday = today - datetime.timedelta(days=1)
+    cycles    = pay_cycles(today)
+    cycle_labels = (
+        [f"Yesterday ({yesterday.strftime('%a %d %b')})"]
+        + [c[0] for c in cycles]
+        + ["Custom dates"]
+    )
 
     period_choice = st.selectbox("Audit period", cycle_labels)
 
@@ -411,6 +424,8 @@ with st.sidebar:
         else:
             start_date = date_range[0] if date_range else today - datetime.timedelta(days=7)
             end_date = today
+    elif period_choice.startswith("Yesterday"):
+        start_date, end_date = yesterday, yesterday
     else:
         _, start_date, end_date = next(c for c in cycles if c[0] == period_choice)
 
@@ -653,7 +668,10 @@ with tab2:
             if not worker_user_id:
                 st.warning("Could not find Connecteam user ID for this worker.")
             else:
-                period_label_str = f"{start_date.strftime('%d %b')} – {end_date.strftime('%d %b %Y')}"
+                if start_date == end_date == yesterday:
+                    period_label_str = f"yesterday ({yesterday.strftime('%a %d %b')})"
+                else:
+                    period_label_str = f"{start_date.strftime('%d %b')} – {end_date.strftime('%d %b %Y')}"
                 default_msg      = build_notify_message(selected_worker, wdf, period_label_str)
 
                 with st.expander("Compose & send message", expanded=False):
@@ -1081,7 +1099,7 @@ with tab7:
                         (df_staff["Worker"] == wname) &
                         (df_staff["Severity"].isin(["CRITICAL","HIGH"]))
                     ][["Severity","Issue","Client","Date","Detail"]]
-                    msg = build_notify_message(wname, wdf, period_label_bulk)
+                    msg = build_notify_message(wname, wdf, period_label_bulk.lower())
                     ok, err = send_worker_message(wid, msg)
                     if ok:
                         log_notification(wname, wid, wdf, msg, period_label_bulk)
