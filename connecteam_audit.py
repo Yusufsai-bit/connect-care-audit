@@ -35,11 +35,13 @@ AEST           = timezone(timedelta(hours=10))
 LATE_MIN              = 30     # minutes grace before flagging late
 EARLY_MIN             = 30     # minutes grace before flagging early departure
 MIN_NOTE_WORDS        = 50     # minimum words for a valid note
-GPS_THRESHOLD_KM      = 3.0    # km radius from client address
+GPS_THRESHOLD_KM      = 0.5    # km radius from client address (overridden by geofence if configured)
 COPY_PASTE_THRESHOLD  = 0.82   # similarity ratio to flag as copy-paste
 NOTE_LATE_HOURS       = 24     # hours after clock-out before note is flagged as backdated
 SHORT_SHIFT_MIN       = 15     # shifts under this many minutes are suspicious
 MULTI_CLOCKIN_DAILY   = 3      # more than this many clock-ins per client per day is suspicious
+BREAK_REQUIRED_AFTER_HOURS = 5.0  # Fair Work: break required after this many hours
+BREAK_MINIMUM_MINS         = 30   # minimum break duration required (minutes)
 
 # Shift attachment field IDs
 NOTES_FIELD = "65cbb88e-6c3a-41b1-8822-975caed50def"
@@ -170,6 +172,118 @@ def fetch_form_submissions(form_id):
     try:
         data = ct_get(f"/forms/v1/forms/{form_id}/form-submissions")
         return data["data"]["formSubmissions"]
+    except Exception:
+        return []
+
+
+def fetch_geofences():
+    """Fetch geofences configured for the time clock."""
+    try:
+        data = ct_get(f"/time-clock/v1/time-clocks/{TIME_CLOCK_ID}/geofences")
+        raw = data.get("data") or {}
+        fences = raw.get("geofences", raw.get("items", []))
+        if isinstance(fences, dict):
+            fences = list(fences.values())
+        return fences if isinstance(fences, list) else []
+    except Exception:
+        return []
+
+
+def fetch_manual_breaks(start_date, end_date):
+    """Fetch manual break records. Returns dict: str(timeActivityId) -> list of break records."""
+    try:
+        data = ct_get(f"/time-clock/v1/time-clocks/{TIME_CLOCK_ID}/manual-breaks",
+                      {"startDate": start_date, "endDate": end_date})
+        raw = data.get("data") or {}
+        result = {}
+        # Try common response shapes
+        for key in ("manualBreaks", "breaks", "items"):
+            entries = raw.get(key)
+            if entries and isinstance(entries, list):
+                for b in entries:
+                    act_id = str(b.get("timeActivityId") or b.get("activityId") or "")
+                    if act_id:
+                        result.setdefault(act_id, []).append(b)
+                break
+        return result
+    except Exception:
+        return {}
+
+
+def fetch_user_unavailabilities(start_ts, end_ts):
+    """Return dict: userId -> list of (start_ts, end_ts) for approved unavailability/leave."""
+    try:
+        data = ct_get("/scheduler/v1/schedulers/user-unavailability",
+                      {"startTime": start_ts, "endTime": end_ts})
+        unavail = defaultdict(list)
+        raw = data.get("data") or {}
+        for key in ("userUnavailabilities", "unavailabilities", "items"):
+            entries = raw.get(key)
+            if entries and isinstance(entries, list):
+                for u in entries:
+                    uid = u.get("userId")
+                    if uid:
+                        unavail[uid].append((
+                            u.get("startTime", u.get("start", 0)),
+                            u.get("endTime",   u.get("end",   0)),
+                        ))
+                break
+        return dict(unavail)
+    except Exception:
+        return {}
+
+
+def fetch_onboarding_completion(active_user_ids):
+    """
+    Returns dict: userId -> list of pack names not yet completed.
+    Only includes workers with at least one incomplete pack.
+    """
+    result = defaultdict(list)
+    try:
+        packs_data = ct_get("/onboarding/v1/packs")
+        raw_packs  = packs_data.get("data") or {}
+        packs      = raw_packs.get("packs", raw_packs.get("items", []))
+        if isinstance(packs, dict):
+            packs = list(packs.values())
+        if not isinstance(packs, list):
+            return {}
+    except Exception:
+        return {}
+
+    for pack in packs:
+        pack_id   = pack.get("packId") or pack.get("id")
+        pack_name = pack.get("name", f"Pack {pack_id}")
+        if not pack_id:
+            continue
+        try:
+            a_data      = ct_get(f"/onboarding/v1/packs/{pack_id}/assignments")
+            raw_assign  = a_data.get("data") or {}
+            assignments = raw_assign.get("assignments", raw_assign.get("items", []))
+            if isinstance(assignments, dict):
+                assignments = list(assignments.values())
+            if not isinstance(assignments, list):
+                continue
+        except Exception:
+            continue
+        for a in assignments:
+            uid = a.get("userId")
+            if uid not in active_user_ids:
+                continue
+            completed = bool(a.get("completedAt") or a.get("isCompleted") or a.get("completed"))
+            if not completed:
+                result[uid].append(pack_name)
+    return dict(result)
+
+
+def fetch_user_custom_fields():
+    """Fetch custom field definitions. Exported for dashboard use."""
+    try:
+        data   = ct_get("/users/v1/custom-fields", {"limit": 100})
+        raw    = data.get("data") or {}
+        fields = raw.get("customFields", raw.get("items", []))
+        if isinstance(fields, dict):
+            fields = list(fields.values())
+        return fields if isinstance(fields, list) else []
     except Exception:
         return []
 
@@ -336,6 +450,41 @@ def run_audit(days_back=7):
     scheduled_shifts   = fetch_scheduled_shifts(start_ts, end_ts)
     activities_by_user = fetch_time_activities(start_date, end_date)
 
+    print("Fetching compliance supplementary data...")
+    geofences          = fetch_geofences()
+    breaks_by_activity = fetch_manual_breaks(start_date, end_date)
+    unavailabilities   = fetch_user_unavailabilities(start_ts, end_ts)
+    active_user_ids    = set(users.keys())
+    onboarding_gaps    = fetch_onboarding_completion(active_user_ids)
+
+    # Build geofence radius lookup: for a given job address, find the nearest
+    # configured geofence and use its radius instead of the hardcoded threshold.
+    def geofence_radius_for_job(job_lat, job_lon):
+        best_dist, best_radius = float("inf"), GPS_THRESHOLD_KM
+        for gf in geofences:
+            gf_lat  = gf.get("latitude") or gf.get("lat", 0)
+            gf_lon  = gf.get("longitude") or gf.get("lng", gf.get("lon", 0))
+            radius_m = gf.get("radius") or gf.get("radiusMeters", 0)
+            if not (gf_lat and gf_lon and radius_m):
+                continue
+            d = haversine_km(job_lat, job_lon, gf_lat, gf_lon)
+            if d < best_dist:
+                best_dist   = d
+                best_radius = radius_m / 1000.0
+        return max(best_radius, 0.05)  # floor at 50 m
+
+    # Build unavailability date lookup: uid -> set of "YYYY-MM-DD" dates on leave
+    unavail_dates = defaultdict(set)
+    for uid, windows in unavailabilities.items():
+        for s, e in windows:
+            if not s:
+                continue
+            cur = datetime.fromtimestamp(s, tz=AEST).date()
+            end_d = datetime.fromtimestamp(e, tz=AEST).date() if e else cur
+            while cur <= end_d:
+                unavail_dates[uid].add(cur.strftime("%Y-%m-%d"))
+                cur += timedelta(days=1)
+
     active_jobs = {jid: j for jid, j in jobs.items() if not j.get("isDeleted")}
 
     def uname(uid):
@@ -415,8 +564,13 @@ def run_audit(days_back=7):
                 )
 
             if not matched:
-                issues.append(Issue("CRITICAL", "NO CLOCK-IN", name, client, dlabel,
-                    f"Rostered {s_str}–{e_str} -- never clocked in."))
+                shift_day = ts_aest(sched_start).strftime("%Y-%m-%d")
+                if shift_day in unavail_dates.get(uid, set()):
+                    issues.append(Issue("LOW", "APPROVED LEAVE", name, client, dlabel,
+                        f"Rostered {s_str}–{e_str} — worker has recorded unavailability for this date (leave/approved absence)."))
+                else:
+                    issues.append(Issue("CRITICAL", "NO CLOCK-IN", name, client, dlabel,
+                        f"Rostered {s_str}–{e_str} -- never clocked in."))
                 continue
 
             clock_in  = matched["start"]["timestamp"]
@@ -498,23 +652,40 @@ def run_audit(days_back=7):
                     f"({ts_aest(clock_in).strftime('%H:%M')}–{ts_aest(clock_out).strftime('%H:%M')}) "
                     "-- possible clock error or fraudulent entry."))
 
-            # GPS check
+            # Break compliance (Fair Work Act)
+            duration_hours = duration_min / 60
+            if duration_hours >= BREAK_REQUIRED_AFTER_HOURS:
+                act_id_str   = str(act.get("id", ""))
+                shift_breaks = breaks_by_activity.get(act_id_str, [])
+                total_break_min = sum(
+                    b.get("durationMinutes", 0) or
+                    max(0, (b.get("endTime", 0) - b.get("startTime", 0)) / 60)
+                    for b in shift_breaks
+                )
+                if total_break_min < BREAK_MINIMUM_MINS:
+                    issues.append(Issue("MEDIUM", "BREAK COMPLIANCE", name, client, dlabel,
+                        f"Shift was {round(duration_hours, 1)}h with no recorded break. "
+                        f"Fair Work requires a {BREAK_MINIMUM_MINS}-min break after {BREAK_REQUIRED_AFTER_HOURS}h."))
+
+            # GPS check — use actual geofence radius where configured, else GPS_THRESHOLD_KM
             if job_id:
                 job     = jobs.get(job_id, {})
                 job_gps = job.get("gps", {})
                 job_lat = job_gps.get("latitude", 0)
                 job_lon = job_gps.get("longitude", 0)
                 if job_lat != 0 and job_lon != 0:
+                    radius_km = geofence_radius_for_job(job_lat, job_lon)
                     loc = act["start"].get("locationData", {})
                     if isinstance(loc, dict):
                         c_lat = loc.get("latitude", 0)
                         c_lon = loc.get("longitude", 0)
                         if c_lat != 0 and c_lon != 0:
                             dist = haversine_km(job_lat, job_lon, c_lat, c_lon)
-                            if dist > GPS_THRESHOLD_KM:
+                            if dist > radius_km:
                                 issues.append(Issue("HIGH", "GPS MISMATCH", name, client, dlabel,
                                     f"Clocked in {dist:.1f}km from client's address "
-                                    f"({loc.get('address', 'unknown')})."))
+                                    f"(allowed radius: {radius_km:.2f}km · "
+                                    f"location: {loc.get('address', 'unknown')})."))
 
     # ------------------------------------------
     # SECTION 3 -- SHIFT NOTE QUALITY
@@ -648,7 +819,7 @@ def run_audit(days_back=7):
         else:
             print("  [INFO] ANTHROPIC_API_KEY not set -- skipping AI note quality assessment.")
 
-    # -- Copy-paste / duplicate notes detection --
+    # -- Copy-paste / duplicate notes detection (same worker, different shifts) --
     for uid, note_list in worker_notes.items():
         name = uname(uid)
         for i in range(len(note_list)):
@@ -658,7 +829,6 @@ def run_audit(days_back=7):
                 if len(t1) > 40 and len(t2) > 40:
                     sim = similarity(t1, t2)
                     if sim >= COPY_PASTE_THRESHOLD:
-                        # Avoid duplicate issue entries for same pair
                         already = any(
                             iss.category == "DUPLICATE/COPY-PASTE NOTES"
                             and iss.worker == name
@@ -670,6 +840,30 @@ def run_audit(days_back=7):
                                 f"{c1} / {c2}", f"{d1} & {d2}",
                                 f"Notes are {round(sim * 100)}% identical across shifts -- "
                                 "worker may be copying notes rather than documenting each shift separately."))
+
+    # -- Cross-worker copy-paste: different workers, same client, same day --
+    client_day_notes = defaultdict(list)  # (client, dlabel) -> [(uid, text)]
+    for uid, note_list in worker_notes.items():
+        for dlabel_n, client_n, text_n in note_list:
+            client_day_notes[(client_n, dlabel_n)].append((uid, text_n))
+
+    seen_cross_pairs = set()
+    for (client_n, day_n), entries in client_day_notes.items():
+        for i in range(len(entries)):
+            for j in range(i + 1, len(entries)):
+                uid1, t1 = entries[i]
+                uid2, t2 = entries[j]
+                if uid1 == uid2 or len(t1) < 40 or len(t2) < 40:
+                    continue
+                sim = similarity(t1, t2)
+                if sim >= COPY_PASTE_THRESHOLD:
+                    pair_key = (min(uid1, uid2), max(uid1, uid2), client_n, day_n)
+                    if pair_key not in seen_cross_pairs:
+                        seen_cross_pairs.add(pair_key)
+                        issues.append(Issue("HIGH", "CROSS-WORKER COPY-PASTE NOTES",
+                            f"{uname(uid1)} / {uname(uid2)}", client_n, day_n,
+                            f"Two workers submitted {round(sim * 100)}% identical notes for "
+                            f"{client_n} on {day_n} — possible template sharing or note fabrication."))
 
     # ------------------------------------------
     # SECTION 4 -- INCIDENT & FORM COMPLIANCE
@@ -921,6 +1115,65 @@ def run_audit(days_back=7):
         issues.append(Issue("HIGH", "FORM FREQUENCY -- NICOLE",
             "(team)", "Nicole Loveless", end_date,
             f"Incident Report submitted {nicole_incidents}x this week -- minimum is 1."))
+
+    # ------------------------------------------
+    # SECTION 6 -- ONBOARDING COMPLIANCE
+    # ------------------------------------------
+    for uid, incomplete_packs in onboarding_gaps.items():
+        name = uname(uid)
+        for pack_name in incomplete_packs:
+            issues.append(Issue("HIGH", "ONBOARDING INCOMPLETE", name,
+                "(all clients)", end_date,
+                f"Worker has not completed onboarding pack: '{pack_name}'. "
+                "Incomplete onboarding may mean mandatory NDIS training has not been done."))
+
+    # ------------------------------------------
+    # SECTION 7 -- WORKER-CLIENT ASSIGNMENT AUTHORISATION
+    # ------------------------------------------
+    # Collect unique (uid, job_id) pairs from actual clock-in data
+    worker_job_pairs = set()
+    for uid, acts in activities_by_user.items():
+        for act in acts:
+            jid = act.get("jobId")
+            if jid:
+                worker_job_pairs.add((uid, jid))
+
+    unique_workers_with_clocks = {uid for uid, _ in worker_job_pairs}
+    assignments_cache = {}
+    # Cap at 30 workers to avoid excessive API calls
+    for uid in list(unique_workers_with_clocks)[:30]:
+        try:
+            data = ct_get(f"/users/v1/users/{uid}/assignments")
+            raw  = data.get("data") or {}
+            assigned_jobs = set()
+            for key in ("assignments", "jobs", "items"):
+                entries = raw.get(key)
+                if entries and isinstance(entries, list):
+                    for a in entries:
+                        jid = a.get("jobId") or a.get("id")
+                        if jid:
+                            assigned_jobs.add(jid)
+                    break
+            if assigned_jobs:
+                assignments_cache[uid] = assigned_jobs
+        except Exception:
+            continue
+
+    seen_auth_flags = set()
+    for uid, jid in worker_job_pairs:
+        if uid not in assignments_cache:
+            continue
+        assigned_jobs = assignments_cache[uid]
+        if jid not in assigned_jobs:
+            flag_key = (uid, jid)
+            if flag_key not in seen_auth_flags:
+                seen_auth_flags.add(flag_key)
+                name   = uname(uid)
+                client = jname(jid)
+                issues.append(Issue("HIGH", "UNAUTHORISED CLIENT ACCESS", name, client,
+                    end_date,
+                    f"Worker clocked in for '{client}' but is not formally assigned to this client in Connecteam HR. "
+                    "Verify this was authorised by management."))
 
     # ------------------------------------------
     # PRINT REPORT
