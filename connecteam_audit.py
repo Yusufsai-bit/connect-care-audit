@@ -25,6 +25,9 @@ from difflib import SequenceMatcher
 
 CONNECTEAM_API_KEY = os.environ.get("CONNECTEAM_API_KEY", "eef0a292-593e-4da8-aed1-204f3c7a8786")
 ANTHROPIC_API_KEY  = os.environ.get("ANTHROPIC_API_KEY", "")
+TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID", "")
+TWILIO_AUTH_TOKEN  = os.environ.get("TWILIO_AUTH_TOKEN", "")
+TWILIO_FROM_NUMBER = os.environ.get("TWILIO_NUMBER", "")
 
 BASE_URL       = "https://api.connecteam.com"
 TIME_CLOCK_ID  = 1776332
@@ -351,6 +354,45 @@ def add_worker_profile_note(user_id, text, title="Compliance Notification"):
         note_id = (result.get("data") or {}).get("id")
         return True, note_id
     return False, result
+
+
+def send_sms(to_number, text):
+    """Send SMS via Twilio. Returns (True, message_sid) or (False, error_string)."""
+    if not all([TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM_NUMBER]):
+        return False, "Twilio credentials not configured — add TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_NUMBER to secrets."
+    try:
+        from twilio.rest import Client
+        client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+        msg = client.messages.create(
+            from_=TWILIO_FROM_NUMBER,
+            body=text[:1600],
+            to=to_number,
+        )
+        return True, msg.sid
+    except Exception as e:
+        return False, str(e)
+
+
+def send_whatsapp(to_number, text, sandbox=False):
+    """
+    Send a WhatsApp message via Twilio.
+    sandbox=True uses the Twilio test sandbox number.
+    Returns (True, message_sid) or (False, error_string).
+    """
+    if not all([TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN]):
+        return False, "Twilio credentials not configured."
+    try:
+        from twilio.rest import Client
+        client   = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+        from_num = "whatsapp:+14155238886" if sandbox else f"whatsapp:{TWILIO_FROM_NUMBER}"
+        msg = client.messages.create(
+            from_=from_num,
+            body=text[:1600],
+            to=f"whatsapp:{to_number}",
+        )
+        return True, msg.sid
+    except Exception as e:
+        return False, str(e)
 
 
 def create_worker_task(task_board_id, user_id, title, description, due_ts=None):

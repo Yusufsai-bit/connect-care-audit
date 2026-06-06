@@ -11,17 +11,22 @@ import json
 import pandas as pd
 import streamlit as st
 
-_ct_key = st.secrets.get("CONNECTEAM_API_KEY", "")
-_ai_key = st.secrets.get("ANTHROPIC_API_KEY", "")
-if _ct_key:
-    os.environ["CONNECTEAM_API_KEY"] = _ct_key
-if _ai_key:
-    os.environ["ANTHROPIC_API_KEY"] = _ai_key
+_ct_key  = st.secrets.get("CONNECTEAM_API_KEY", "")
+_ai_key  = st.secrets.get("ANTHROPIC_API_KEY", "")
+_tw_sid  = st.secrets.get("TWILIO_ACCOUNT_SID", "")
+_tw_tok  = st.secrets.get("TWILIO_AUTH_TOKEN", "")
+_tw_num  = st.secrets.get("TWILIO_NUMBER", "")
+if _ct_key:  os.environ["CONNECTEAM_API_KEY"]  = _ct_key
+if _ai_key:  os.environ["ANTHROPIC_API_KEY"]   = _ai_key
+if _tw_sid:  os.environ["TWILIO_ACCOUNT_SID"]  = _tw_sid
+if _tw_tok:  os.environ["TWILIO_AUTH_TOKEN"]   = _tw_tok
+if _tw_num:  os.environ["TWILIO_NUMBER"]       = _tw_num
 
 from connecteam_audit import (
     run_audit, fetch_all_users, fetch_user_custom_fields,
     send_worker_message, add_worker_profile_note,
     create_worker_task, fetch_task_boards,
+    send_sms, send_whatsapp,
 )
 
 # ── Page config ───────────────────────────────────────────────────────────────
@@ -673,8 +678,21 @@ with tab2:
                 default_msg      = build_notify_message(selected_worker, wdf, period_label_str)
 
                 with st.expander("Compose & send message", expanded=False):
+                    msg_channel = st.radio(
+                        "Send via",
+                        ["WhatsApp (sandbox — testing)", "SMS"],
+                        horizontal=True,
+                        key=f"chan_{selected_worker}",
+                        help="Sandbox = testing only (worker must have joined sandbox first). SMS works immediately.",
+                    )
+                    worker_phone = worker_info.get("phone", "")
+                    if worker_phone:
+                        st.caption(f"Sending to: {worker_phone}")
+                    else:
+                        st.warning("No phone number on file for this worker.")
+
                     edited_msg = st.text_area(
-                        "Message to send via Connecteam chat",
+                        "Message",
                         value=default_msg,
                         height=260,
                         key=f"msg_{selected_worker}",
@@ -707,11 +725,21 @@ with tab2:
                     st.markdown("<br>", unsafe_allow_html=True)
                     if st.button("📤  Send Now", type="primary", key=f"send_{selected_worker}"):
                         errors = []
+                        worker_phone = worker_info.get("phone", "").strip()
 
-                        # 1. Send chat message
-                        ok, err = send_worker_message(worker_user_id, edited_msg)
-                        if not ok:
-                            errors.append(f"Chat message failed: {err}")
+                        # 1. Send via Twilio (WhatsApp sandbox or SMS)
+                        if not worker_phone:
+                            errors.append("No phone number on file for this worker in Connecteam.")
+                            ok = False
+                        elif msg_channel == "WhatsApp (sandbox — testing)":
+                            ok, err = send_whatsapp(worker_phone, edited_msg, sandbox=True)
+                            if not ok: errors.append(f"WhatsApp failed: {err}")
+                        elif msg_channel == "WhatsApp":
+                            ok, err = send_whatsapp(worker_phone, edited_msg, sandbox=False)
+                            if not ok: errors.append(f"WhatsApp failed: {err}")
+                        else:
+                            ok, err = send_sms(worker_phone, edited_msg)
+                            if not ok: errors.append(f"SMS failed: {err}")
 
                         # 2. Add HR profile note
                         note_ok = False
@@ -1084,21 +1112,31 @@ with tab7:
         period_label_bulk = f"{start_date.strftime('%d %b')} – {end_date.strftime('%d %b %Y')}"
 
         if bulk_workers:
+            bulk_channel = st.radio(
+                "Send via",
+                ["WhatsApp (sandbox — testing)", "SMS"],
+                horizontal=True,
+                key="bulk_channel",
+            )
             st.caption(f"Will send {len(bulk_workers)} message(s). Each worker gets a personalised message listing only their own issues.")
             if st.button("📤  Send to All Selected", type="primary"):
                 sent_ok, sent_fail = [], []
                 for wname in bulk_workers:
-                    winfo = contacts.get(wname, {})
-                    wid   = winfo.get("userId")
-                    if not wid:
-                        sent_fail.append(f"{wname} (no user ID)")
+                    winfo  = contacts.get(wname, {})
+                    wid    = winfo.get("userId")
+                    wphone = winfo.get("phone", "").strip()
+                    if not wphone:
+                        sent_fail.append(f"{wname} (no phone number)")
                         continue
                     wdf = df_staff[
                         (df_staff["Worker"] == wname) &
                         (df_staff["Severity"].isin(["CRITICAL","HIGH"]))
                     ][["Severity","Issue","Client","Date","Detail"]]
                     msg = build_notify_message(wname, wdf, period_label_bulk.lower())
-                    ok, err = send_worker_message(wid, msg)
+                    if bulk_channel == "WhatsApp (sandbox — testing)":
+                        ok, err = send_whatsapp(wphone, msg, sandbox=True)
+                    else:
+                        ok, err = send_sms(wphone, msg)
                     if ok:
                         log_notification(wname, wid, wdf, msg, period_label_bulk)
                         sent_ok.append(wname)
