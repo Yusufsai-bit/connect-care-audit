@@ -202,10 +202,27 @@ def doc_status(expiry_str):
 # ── Notification helpers ──────────────────────────────────────────────────────
 
 import uuid as _uuid
+import json as _json
+
+_NOTIF_FILE = os.path.join(os.path.dirname(__file__), "notifications_log.json")
+
+def _save_notifications(notifs):
+    try:
+        with open(_NOTIF_FILE, "w", encoding="utf-8") as f:
+            _json.dump(notifs, f, default=str, indent=2)
+    except Exception:
+        pass
+
+def _load_notifications():
+    try:
+        with open(_NOTIF_FILE, "r", encoding="utf-8") as f:
+            return _json.load(f)
+    except Exception:
+        return []
 
 def init_notifications():
     if "notifications" not in st.session_state:
-        st.session_state.notifications = []
+        st.session_state.notifications = _load_notifications()
 
 def build_notify_message(worker_name, issues_df, period_label):
     """Build an urgent, personal-sounding message from a manager."""
@@ -246,6 +263,15 @@ def build_notify_message(worker_name, issues_df, period_label):
     ]
     return "\n".join(lines)
 
+def build_reminder_message(worker_name):
+    first = worker_name.split()[0]
+    return (
+        f"Hi {first}, just following up — still waiting to hear back about "
+        f"your shift issues from earlier today.\n\n"
+        f"Please reply before 5 PM or give me a call if you need help.\n\n"
+        f"Cheers"
+    )
+
 def log_notification(worker_name, worker_id, issues_df, message_text, period_label,
                      task_id=None, profile_note_added=False):
     init_notifications()
@@ -255,6 +281,7 @@ def log_notification(worker_name, worker_id, issues_df, message_text, period_lab
         "worker":             worker_name,
         "worker_id":          worker_id,
         "sent_at":            datetime.datetime.now().strftime("%d %b %Y, %I:%M %p"),
+        "sent_at_iso":        datetime.datetime.now().isoformat(),
         "period":             period_label,
         "severity_counts":    sev_counts,
         "issue_count":        len(issues_df),
@@ -267,6 +294,7 @@ def log_notification(worker_name, worker_id, issues_df, message_text, period_lab
         "task_id":            task_id,
         "profile_note_added": profile_note_added,
     })
+    _save_notifications(st.session_state.notifications)
 
 # ── Password gate ─────────────────────────────────────────────────────────────
 
@@ -1151,6 +1179,42 @@ with tab7:
                 if sent_ok:
                     st.rerun()
 
+    # ── Send Reminders ────────────────────────────────────────────────────────
+    pending = [n for n in notifs if n["status"] == "Sent"]
+    if pending:
+        with st.expander(f"📩 Send Reminders — {len(pending)} worker(s) haven't replied yet"):
+            reminder_channel = st.radio(
+                "Send via",
+                ["WhatsApp (sandbox — testing)", "SMS"],
+                horizontal=True,
+                key="reminder_channel",
+            )
+            contacts_r = load_worker_contacts()
+            st.caption(
+                f"Will send a follow-up to: {', '.join(n['worker'] for n in pending)}"
+            )
+            if st.button("📩 Send Follow-Up to All Pending", type="primary"):
+                ok_r, fail_r = [], []
+                for n in pending:
+                    winfo  = contacts_r.get(n["worker"], {})
+                    wphone = winfo.get("phone", "").strip()
+                    if not wphone:
+                        fail_r.append(f"{n['worker']} (no phone)")
+                        continue
+                    msg = build_reminder_message(n["worker"])
+                    if reminder_channel == "WhatsApp (sandbox — testing)":
+                        ok, err = send_whatsapp(wphone, msg, sandbox=True)
+                    else:
+                        ok, err = send_sms(wphone, msg)
+                    if ok:
+                        ok_r.append(n["worker"])
+                    else:
+                        fail_r.append(f"{n['worker']} ({err})")
+                if ok_r:
+                    st.success(f"Follow-up sent to: {', '.join(ok_r)}")
+                if fail_r:
+                    st.error(f"Failed: {', '.join(fail_r)}")
+
     st.divider()
 
     # ── Notification history ──────────────────────────────────────────────────
@@ -1221,6 +1285,7 @@ with tab7:
                     ):
                         notifs[real_idx]["status"] = "Acknowledged"
                         notifs[real_idx]["acknowledged_at"] = datetime.datetime.now().strftime("%d %b %Y, %I:%M %p")
+                        _save_notifications(notifs)
                         st.rerun()
 
                 with act_col2:
@@ -1232,6 +1297,7 @@ with tab7:
                         notifs[real_idx]["resolved_at"] = datetime.datetime.now().strftime("%d %b %Y, %I:%M %p")
                         if notifs[real_idx]["acknowledged_at"] is None:
                             notifs[real_idx]["acknowledged_at"] = notifs[real_idx]["resolved_at"]
+                        _save_notifications(notifs)
                         st.rerun()
 
                 with act_col3:
@@ -1247,6 +1313,7 @@ with tab7:
                         )
                         if note_ok:
                             notifs[real_idx]["profile_note_added"] = True
+                            _save_notifications(notifs)
                             st.success("Note added to profile.")
                             st.rerun()
                         else:
