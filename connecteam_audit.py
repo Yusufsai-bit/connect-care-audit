@@ -27,7 +27,8 @@ CONNECTEAM_API_KEY = os.environ.get("CONNECTEAM_API_KEY", "eef0a292-593e-4da8-ae
 ANTHROPIC_API_KEY  = os.environ.get("ANTHROPIC_API_KEY", "")
 TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID", "")
 TWILIO_AUTH_TOKEN  = os.environ.get("TWILIO_AUTH_TOKEN", "")
-TWILIO_FROM_NUMBER = os.environ.get("TWILIO_NUMBER", "")
+TWILIO_FROM_NUMBER    = os.environ.get("TWILIO_NUMBER", "")
+TWILIO_WA_NUMBER      = os.environ.get("TWILIO_WHATSAPP_NUMBER", TWILIO_FROM_NUMBER)
 
 BASE_URL       = "https://api.connecteam.com"
 TIME_CLOCK_ID  = 1776332
@@ -384,7 +385,7 @@ def send_whatsapp(to_number, text, sandbox=False):
     try:
         from twilio.rest import Client
         client   = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
-        from_num = "whatsapp:+14155238886" if sandbox else f"whatsapp:{TWILIO_FROM_NUMBER}"
+        from_num = "whatsapp:+14155238886" if sandbox else f"whatsapp:{TWILIO_WA_NUMBER}"
         msg = client.messages.create(
             from_=from_num,
             body=text[:1600],

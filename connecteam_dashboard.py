@@ -16,11 +16,13 @@ _ai_key  = st.secrets.get("ANTHROPIC_API_KEY", "")
 _tw_sid  = st.secrets.get("TWILIO_ACCOUNT_SID", "")
 _tw_tok  = st.secrets.get("TWILIO_AUTH_TOKEN", "")
 _tw_num  = st.secrets.get("TWILIO_NUMBER", "")
-if _ct_key:  os.environ["CONNECTEAM_API_KEY"]  = _ct_key
-if _ai_key:  os.environ["ANTHROPIC_API_KEY"]   = _ai_key
-if _tw_sid:  os.environ["TWILIO_ACCOUNT_SID"]  = _tw_sid
-if _tw_tok:  os.environ["TWILIO_AUTH_TOKEN"]   = _tw_tok
-if _tw_num:  os.environ["TWILIO_NUMBER"]       = _tw_num
+_tw_wa   = st.secrets.get("TWILIO_WHATSAPP_NUMBER", "")
+if _ct_key:  os.environ["CONNECTEAM_API_KEY"]       = _ct_key
+if _ai_key:  os.environ["ANTHROPIC_API_KEY"]        = _ai_key
+if _tw_sid:  os.environ["TWILIO_ACCOUNT_SID"]       = _tw_sid
+if _tw_tok:  os.environ["TWILIO_AUTH_TOKEN"]        = _tw_tok
+if _tw_num:  os.environ["TWILIO_NUMBER"]            = _tw_num
+if _tw_wa:   os.environ["TWILIO_WHATSAPP_NUMBER"]   = _tw_wa
 
 from connecteam_audit import (
     run_audit, fetch_all_users, fetch_user_custom_fields,
@@ -710,7 +712,7 @@ with tab2:
                 with st.expander("Compose & send message", expanded=False):
                     msg_channel = st.radio(
                         "Send via",
-                        ["WhatsApp (sandbox — testing)", "SMS"],
+                        ["WhatsApp", "SMS"],
                         horizontal=True,
                         key=f"chan_{selected_worker}",
                         help="Sandbox = testing only (worker must have joined sandbox first). SMS works immediately.",
@@ -761,8 +763,8 @@ with tab2:
                         if not worker_phone:
                             errors.append("No phone number on file for this worker in Connecteam.")
                             ok = False
-                        elif msg_channel == "WhatsApp (sandbox — testing)":
-                            ok, err = send_whatsapp(worker_phone, edited_msg, sandbox=True)
+                        elif msg_channel == "WhatsApp":
+                            ok, err = send_whatsapp(worker_phone, edited_msg, sandbox=False)
                             if not ok: errors.append(f"WhatsApp failed: {err}")
                         elif msg_channel == "WhatsApp":
                             ok, err = send_whatsapp(worker_phone, edited_msg, sandbox=False)
@@ -1144,7 +1146,7 @@ with tab7:
         if bulk_workers:
             bulk_channel = st.radio(
                 "Send via",
-                ["WhatsApp (sandbox — testing)", "SMS"],
+                ["WhatsApp", "SMS"],
                 horizontal=True,
                 key="bulk_channel",
             )
@@ -1163,8 +1165,8 @@ with tab7:
                         (df_staff["Severity"].isin(["CRITICAL","HIGH"]))
                     ][["Severity","Issue","Client","Date","Detail"]]
                     msg = build_notify_message(wname, wdf, period_label_bulk.lower())
-                    if bulk_channel == "WhatsApp (sandbox — testing)":
-                        ok, err = send_whatsapp(wphone, msg, sandbox=True)
+                    if bulk_channel == "WhatsApp":
+                        ok, err = send_whatsapp(wphone, msg, sandbox=False)
                     else:
                         ok, err = send_sms(wphone, msg)
                     if ok:
@@ -1185,7 +1187,7 @@ with tab7:
         with st.expander(f"📩 Send Reminders — {len(pending)} worker(s) haven't replied yet"):
             reminder_channel = st.radio(
                 "Send via",
-                ["WhatsApp (sandbox — testing)", "SMS"],
+                ["WhatsApp", "SMS"],
                 horizontal=True,
                 key="reminder_channel",
             )
@@ -1202,8 +1204,8 @@ with tab7:
                         fail_r.append(f"{n['worker']} (no phone)")
                         continue
                     msg = build_reminder_message(n["worker"])
-                    if reminder_channel == "WhatsApp (sandbox — testing)":
-                        ok, err = send_whatsapp(wphone, msg, sandbox=True)
+                    if reminder_channel == "WhatsApp":
+                        ok, err = send_whatsapp(wphone, msg, sandbox=False)
                     else:
                         ok, err = send_sms(wphone, msg)
                     if ok:
