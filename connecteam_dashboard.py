@@ -213,7 +213,7 @@ def build_notify_message(worker_name, issues_df, period_label):
     lines = [
         f"Hi {first},",
         "",
-        f"From your shift {period_label} — I need you to fix these today:",
+        f"From your shift {period_label} — I need you to sort these out by 5 PM today:",
         "",
     ]
 
@@ -240,7 +240,7 @@ def build_notify_message(worker_name, issues_df, period_label):
 
     lines += [
         "",
-        "Can you reply and let me know what happened and what you've done to sort it out?",
+        "Reply and let me know what happened and what you've done to fix it — need to hear back by 5 PM.",
         "",
         "Cheers",
     ]
