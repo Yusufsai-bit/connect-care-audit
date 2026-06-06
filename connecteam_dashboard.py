@@ -240,7 +240,11 @@ def build_notify_message(worker_name, issues_df, period_label):
 
     lines += [
         "",
-        "Reply here when done. Thanks",
+        "Please reply with:",
+        "1. What happened",
+        "2. What you have done to fix it",
+        "",
+        "Thanks",
     ]
     return "\n".join(lines)
 
