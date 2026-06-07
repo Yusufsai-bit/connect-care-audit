@@ -79,6 +79,10 @@ FORMS = {
 # Peter Eronmwon's user ID (required for Michael medication check)
 PETER_USER_ID = 2200746
 
+# Management observers — receive a CC copy of every compliance message sent to workers
+# and a forward of every worker reply. Yusuf, Nada, Faduma.
+COMPLIANCE_OBSERVER_IDS = [2149475, 9736871, 2201497]
+
 # GPS overrides — fallback coordinates when the Connecteam job record has no GPS configured.
 # Format: lowercase keyword in job title → (latitude, longitude, radius_km)
 # Coordinates verified via OpenStreetMap Nominatim geocoder.
@@ -587,23 +591,33 @@ def register_webhooks(webhook_url, secret=""):
     return results
 
 
-def send_worker_message(user_id, text):
+def send_worker_message(user_id, text, worker_name=None):
     """
-    Send a private Connecteam chat message to the given worker.
-    Requires Communications Hub Expert plan + a custom publisher configured in
-    Settings → Feed settings. Set CONNECTEAM_SENDER_ID to that publisher's ID.
+    Send a private Connecteam chat message to the given worker, then CC all
+    COMPLIANCE_OBSERVER_IDS with a copy showing who it was sent to.
     Returns (True, message_id) on success or (False, error_string) on failure.
     """
     if not CONNECTEAM_SENDER_ID:
-        return False, "CONNECTEAM_SENDER_ID not set — create a custom publisher in Connecteam Settings → Feed settings and add its ID to secrets."
+        return False, "CONNECTEAM_SENDER_ID not set."
     ok, result = ct_post(
         f"/chat/v1/conversations/privateMessage/{user_id}",
         {"senderId": CONNECTEAM_SENDER_ID, "text": text[:1000]},
     )
-    if ok:
-        msg_id = result.get("data", {}).get("messageId") or result.get("messageId")
-        return True, msg_id
-    return False, result
+    if not ok:
+        return False, result
+    msg_id = (result.get("data") or {}).get("messageId") or result.get("messageId")
+
+    # CC management observers
+    label = worker_name or f"User {user_id}"
+    cc_text = f"CC — sent to {label}:\n\n{text[:900]}"
+    for oid in COMPLIANCE_OBSERVER_IDS:
+        if str(oid) != str(user_id):   # don't double-message if observer is the worker
+            ct_post(
+                f"/chat/v1/conversations/privateMessage/{oid}",
+                {"senderId": CONNECTEAM_SENDER_ID, "text": cc_text},
+            )
+
+    return True, msg_id
 
 
 def add_worker_profile_note(user_id, text, title="Compliance Notification"):
