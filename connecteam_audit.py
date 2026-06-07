@@ -79,6 +79,13 @@ FORMS = {
 # Peter Eronmwon's user ID (required for Michael medication check)
 PETER_USER_ID = 2200746
 
+# GPS overrides — fallback coordinates when the Connecteam job record has no GPS configured.
+# Format: lowercase keyword in job title → (latitude, longitude, radius_km)
+# Coordinates verified via OpenStreetMap Nominatim geocoder.
+CLIENT_GPS_OVERRIDES = {
+    "john": (-37.67282, 144.99437, 0.2),   # 14 Linton Dr, Thomastown VIC 3074
+}
+
 # Job title keywords for client matching
 CLIENT_TITLES = {
     "kallan":  "Kallan Jordan",
@@ -1066,6 +1073,13 @@ def run_audit(days_back=7):
                 job_gps = job.get("gps", {})
                 job_lat = job_gps.get("latitude", 0)
                 job_lon = job_gps.get("longitude", 0)
+                # Fall back to manual GPS override if Connecteam job has no coordinates
+                if job_lat == 0 or job_lon == 0:
+                    job_title_lc = job.get("title", "").lower()
+                    for kw, (ov_lat, ov_lon, _ov_r) in CLIENT_GPS_OVERRIDES.items():
+                        if kw in job_title_lc:
+                            job_lat, job_lon = ov_lat, ov_lon
+                            break
                 if job_lat != 0 and job_lon != 0:
                     radius_km = geofence_radius_for_job(job_lat, job_lon)
                     loc = act["start"].get("locationData", {})
