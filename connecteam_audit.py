@@ -414,6 +414,121 @@ def fetch_worker_credentials(users):
     return result
 
 
+def auto_detect_ids():
+    """
+    Auto-detect all Connecteam IDs that are currently hardcoded.
+    Returns dict with keys: time_clock_id, scheduler_id, sender_id,
+    compliance_indicator_id, form_ids (dict name->id)
+    """
+    detected = {}
+
+    # Time clock
+    d = ct_get("/time-clock/v1/time-clocks")
+    clocks = (d.get("data") or {}).get("timeClocks") or (d.get("data") or {}).get("items") or []
+    if clocks:
+        detected["time_clock_id"] = clocks[0].get("id") or clocks[0].get("timeClockId")
+
+    # Scheduler
+    d = ct_get("/scheduler/v1/schedulers")
+    schedulers = (d.get("data") or {}).get("schedulers") or (d.get("data") or {}).get("items") or []
+    if schedulers:
+        detected["scheduler_id"] = schedulers[0].get("id") or schedulers[0].get("schedulerId")
+
+    # Publisher / sender
+    d = ct_get("/publishers/v1/publishers")
+    publishers = (d.get("data") or {}).get("publishers") or (d.get("data") or {}).get("items") or []
+    if publishers:
+        detected["sender_id"] = publishers[0].get("id") or publishers[0].get("publisherId")
+
+    # Compliance performance indicator
+    d = ct_get("/users/v1/performance-indicators")
+    indicators = (d.get("data") or {}).get("indicators") or (d.get("data") or {}).get("items") or []
+    for ind in indicators:
+        if "compliance" in (ind.get("name") or "").lower():
+            detected["compliance_indicator_id"] = ind.get("id") or ind.get("indicatorId")
+            break
+
+    # Form IDs by name
+    d = ct_get("/forms/v1/forms")
+    forms_list = (d.get("data") or {}).get("forms") or (d.get("data") or {}).get("items") or []
+    detected["form_ids"] = {}
+    for form in forms_list:
+        name = form.get("name") or form.get("title") or ""
+        fid  = form.get("id") or form.get("formId")
+        if name and fid:
+            detected["form_ids"][name] = fid
+
+    return detected
+
+
+def fetch_timesheet(start_date, end_date):
+    """Payroll/billing totals per worker with pay rates. Max 45-day window."""
+    d = ct_get(
+        f"/time-clock/v1/time-clocks/{TIME_CLOCK_ID}/timesheet",
+        {"startDate": start_date, "endDate": end_date},
+    )
+    return (d.get("data") or {}).get("timesheetEntries") or (d.get("data") or {}).get("entries") or []
+
+
+def fetch_pay_rates():
+    d = ct_get("/pay-rates/v1/pay-rates")
+    return (d.get("data") or {}).get("payRates") or (d.get("data") or {}).get("items") or []
+
+
+def lock_worker_days(user_id, dates):
+    """Lock time entries for a worker on a list of YYYY-MM-DD date strings."""
+    locked = [{"date": d, "isLocked": True} for d in dates]
+    return ct_put(
+        f"/time-clock/v1/time-clocks/{TIME_CLOCK_ID}/users/{user_id}/lock-days",
+        {"lockDays": locked},
+    )
+
+
+def add_worker_note(user_id, text):
+    """Add a permanent compliance note to the worker's Connecteam HR profile."""
+    return ct_post(f"/users/v1/users/{user_id}/notes", {"note": text[:2000]})
+
+
+def push_daily_info_note(text, date_str=None):
+    """Push compliance summary to Connecteam Daily Info section."""
+    if date_str is None:
+        date_str = datetime.now(AEST).strftime("%Y-%m-%d")
+    return ct_post("/daily-info/v1/daily-notes", {"date": date_str, "note": text[:5000]})
+
+
+def fetch_time_off_policies():
+    d = ct_get("/time-off/v1/policy-types")
+    return (d.get("data") or {}).get("policyTypes") or (d.get("data") or {}).get("items") or []
+
+
+def fetch_time_off_balances(policy_type_id):
+    d = ct_get(f"/time-off/v1/policy-types/{policy_type_id}/balances")
+    return (d.get("data") or {}).get("balances") or (d.get("data") or {}).get("items") or []
+
+
+def fetch_shift_layers():
+    d = ct_get(f"/scheduler/v1/schedulers/{SCHEDULER_ID}/shift-layers")
+    return (d.get("data") or {}).get("layers") or (d.get("data") or {}).get("items") or []
+
+
+def fetch_shift_layer_values(layer_id):
+    d = ct_get(f"/scheduler/v1/schedulers/{SCHEDULER_ID}/shift-layers/{layer_id}/values")
+    return (d.get("data") or {}).get("values") or (d.get("data") or {}).get("items") or []
+
+
+def fetch_open_tasks(task_board_id):
+    d = ct_get(f"/tasks/v1/taskboards/{task_board_id}/tasks", {"status": "open", "limit": 100})
+    return (d.get("data") or {}).get("tasks") or (d.get("data") or {}).get("items") or []
+
+
+def create_geofence(name, lat, lon, radius_m=200):
+    """Create a geofence for a client address via the API."""
+    return ct_post(
+        f"/time-clock/v1/time-clocks/{TIME_CLOCK_ID}/geofences",
+        {"name": name, "latitude": lat, "longitude": lon, "radius": int(radius_m)},
+    )
+
+
 def write_compliance_score(user_id, score, date_str=None):
     """
     Write a compliance score (0-100) to the worker's Connecteam performance profile.
@@ -434,13 +549,24 @@ def write_compliance_score(user_id, score, date_str=None):
 def register_webhooks(webhook_url, secret=""):
     """
     Programmatically register all compliance webhooks in Connecteam.
-    Call from dashboard 'Setup Webhooks' button after deploying connecteam_webhook.py.
     Returns list of (ok, name, detail) tuples.
     """
     targets = [
-        {"name": "Compliance — Clock Out",      "featureType": "time_activity", "entityId": str(TIME_CLOCK_ID)},
-        {"name": "Compliance — Form Submitted",  "featureType": "forms"},
-        {"name": "Compliance — Chat Reply",      "featureType": "chat"},
+        # Time clock events
+        {"name": "Compliance — Clock In",           "featureType": "time_activity", "entityId": str(TIME_CLOCK_ID)},
+        {"name": "Compliance — Clock Out",          "featureType": "time_activity", "entityId": str(TIME_CLOCK_ID)},
+        {"name": "Compliance — Auto Clock Out",     "featureType": "time_activity", "entityId": str(TIME_CLOCK_ID)},
+        {"name": "Compliance — Admin Time Edit",    "featureType": "time_activity", "entityId": str(TIME_CLOCK_ID)},
+        {"name": "Compliance — Admin Time Add",     "featureType": "time_activity", "entityId": str(TIME_CLOCK_ID)},
+        # Scheduler events
+        {"name": "Compliance — Shifts Updated",     "featureType": "scheduler"},
+        {"name": "Compliance — Shifts Deleted",     "featureType": "scheduler"},
+        # Forms
+        {"name": "Compliance — Form Submitted",     "featureType": "forms"},
+        # Chat
+        {"name": "Compliance — Chat Reply",         "featureType": "chat"},
+        # User events
+        {"name": "Compliance — User Changes",       "featureType": "users"},
     ]
     results = []
     for t in targets:
@@ -714,6 +840,15 @@ def run_audit(days_back=7):
     unavailabilities   = fetch_user_unavailabilities(start_ts, end_ts)
     active_user_ids    = set(users.keys())
     onboarding_gaps    = fetch_onboarding_completion(active_user_ids)
+
+    # Fetch shift layers (custom fields/notes on scheduled shifts)
+    try:
+        shift_layers = fetch_shift_layers()
+        # Build layer_id -> layer_name for readable output
+        layer_names = {str(l.get("id") or l.get("layerId")): l.get("name", "Layer") for l in shift_layers}
+    except Exception:
+        shift_layers = []
+        layer_names = {}
 
     # Build geofence radius lookup: for a given job address, find the nearest
     # configured geofence and use its radius instead of the hardcoded threshold.
@@ -1462,6 +1597,85 @@ def run_audit(days_back=7):
                         f"{expiry_date.strftime('%d %b %Y')}. Begin renewal process now."))
     except Exception as e:
         print(f"  [WARNING] Credential expiry check failed: {e}")
+
+    # ------------------------------------------
+    # SECTION 9 — TIMESHEET BILLING AUDIT
+    # ------------------------------------------
+    try:
+        timesheet = fetch_timesheet(start_date, end_date)
+        for entry in timesheet:
+            uid        = entry.get("userId")
+            name       = uname(uid) if uid else "Unknown"
+            total_hrs  = float(entry.get("totalHours") or entry.get("totalWorkedHours") or 0)
+            pay_rate   = entry.get("payRate") or entry.get("hourlyRate")
+            week_days  = days_back
+
+            # No pay rate configured
+            if pay_rate is None:
+                issues.append(Issue("MEDIUM", "NO PAY RATE CONFIGURED", name,
+                    "(payroll)", end_date,
+                    f"Worker has no pay rate set in Connecteam — payroll and NDIS billing cannot be verified."))
+
+            # Excessive hours (SCHADS Award: 38h/week ordinary, 10h/day max)
+            weekly_cap = 38.0 * (days_back / 7)
+            if total_hrs > weekly_cap and days_back >= 7:
+                issues.append(Issue("HIGH", "EXCESSIVE HOURS — BILLING RISK", name,
+                    "(payroll)", end_date,
+                    f"Worker recorded {total_hrs:.1f}h over {days_back} days "
+                    f"(SCHADS ordinary-hours cap ~{weekly_cap:.0f}h for this period). "
+                    "Verify NDIS billing and check for duplicate entries."))
+
+            # Suspiciously high pay rate (> $100/hr is almost certainly a data entry error)
+            if pay_rate and float(pay_rate) > 100:
+                issues.append(Issue("HIGH", "ABNORMAL PAY RATE", name,
+                    "(payroll)", end_date,
+                    f"Pay rate ${float(pay_rate):.2f}/hr appears unusually high. "
+                    "Verify against SCHADS Award and NDIS price guide."))
+    except Exception as e:
+        print(f"  [WARNING] Timesheet billing audit failed: {e}")
+
+    # ------------------------------------------
+    # SECTION 10 — LEAVE BALANCE ALERTS
+    # ------------------------------------------
+    try:
+        leave_policies = fetch_time_off_policies()
+        for policy in leave_policies:
+            pol_id   = policy.get("id") or policy.get("policyTypeId")
+            pol_name = policy.get("name") or policy.get("title") or "Leave"
+            if not pol_id:
+                continue
+            balances = fetch_time_off_balances(pol_id)
+            for bal in balances:
+                uid      = bal.get("userId")
+                balance  = float(bal.get("balance") or bal.get("remainingBalance") or 0)
+                name     = uname(uid) if uid else "Unknown"
+                # Flag workers with negative leave balance (borrowed leave)
+                if balance < 0:
+                    issues.append(Issue("MEDIUM", "NEGATIVE LEAVE BALANCE", name,
+                        "(HR)", end_date,
+                        f"{pol_name}: balance is {balance:.1f}h — worker is in negative leave. "
+                        "Verify entitlement and payroll treatment."))
+    except Exception as e:
+        print(f"  [WARNING] Leave balance check failed: {e}")
+
+    # ------------------------------------------
+    # SECTION 11 — PAY RATE AUDIT
+    # ------------------------------------------
+    try:
+        pay_rates_list = fetch_pay_rates()
+        workers_with_rates = {
+            (r.get("userId") or r.get("user", {}).get("id")): float(r.get("rate") or r.get("payRate") or 0)
+            for r in pay_rates_list
+            if r.get("userId") or (r.get("user") or {}).get("id")
+        }
+        for uid in users:
+            name = uname(uid)
+            if uid not in workers_with_rates:
+                issues.append(Issue("LOW", "NO PAY RATE CONFIGURED", name,
+                    "(payroll)", end_date,
+                    "Worker profile has no pay rate set — payroll exports will be incomplete."))
+    except Exception as e:
+        print(f"  [WARNING] Pay rate audit failed: {e}")
 
     # ------------------------------------------
     # PRINT REPORT
