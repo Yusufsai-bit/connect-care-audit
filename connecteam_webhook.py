@@ -155,6 +155,109 @@ def send_connecteam_chat(user_id, text):
 
 # ── Event handlers ────────────────────────────────────────────────────────────
 
+def handle_clock_in(data):
+    """Real-time GPS check on clock-in — worker still on-site, actionable immediately."""
+    user_id = data.get("userId")
+    job_id  = data.get("jobId")
+    if not user_id:
+        return
+    worker_name = get_worker_name(user_id)
+    client_name = get_job_name(job_id) if job_id else "unknown client"
+    loc         = data.get("location") or data.get("locationData") or {}
+    clock_lat   = loc.get("latitude", 0)
+    clock_lon   = loc.get("longitude", 0)
+    print(f"  Clock-in: {worker_name} → {client_name} (GPS: {clock_lat}, {clock_lon})")
+    # Log to notifications for dashboard visibility — no message sent (no action needed unless GPS fails)
+
+
+def handle_admin_time_edit(data):
+    """
+    FRAUD DETECTION: Admin manually edited a time entry.
+    Alert manager immediately — retroactive edits are a primary billing fraud vector.
+    """
+    user_id     = data.get("userId")
+    editor_id   = data.get("adminId") or data.get("editedBy")
+    job_id      = data.get("jobId")
+    if not user_id:
+        return
+
+    worker      = get_worker_name(user_id)
+    editor      = get_worker_name(editor_id) if editor_id else "An admin"
+    client      = get_job_name(job_id) if job_id else "unknown client"
+    old_start   = data.get("previousStartTime") or data.get("oldStartTime") or ""
+    new_start   = data.get("newStartTime") or data.get("startTime") or ""
+    old_end     = data.get("previousEndTime") or data.get("oldEndTime") or ""
+    new_end     = data.get("newEndTime") or data.get("endTime") or ""
+
+    alert = (
+        f"⚠️ TIME ENTRY EDITED — possible billing adjustment.\n\n"
+        f"Worker: {worker}\n"
+        f"Client: {client}\n"
+        f"Edited by: {editor}\n"
+    )
+    if old_start or old_end:
+        alert += f"Was: {old_start} – {old_end}\n"
+    if new_start or new_end:
+        alert += f"Now: {new_start} – {new_end}\n"
+    alert += "\nVerify this change is authorised and reflects actual hours worked."
+
+    print(f"  ADMIN TIME EDIT: {editor} edited {worker}'s entry for {client}")
+
+    if MANAGER_NUMBER and CT_KEY:
+        send_msg(MANAGER_NUMBER, alert)
+
+
+def handle_auto_clock_out(data):
+    """System forced a clock-out — more urgent than a manual missed clock-out."""
+    user_id = data.get("userId")
+    job_id  = data.get("jobId")
+    if not user_id:
+        return
+
+    worker = get_worker_name(user_id)
+    client = get_job_name(job_id) if job_id else "unknown client"
+    first  = worker.split()[0] if worker else "Hi"
+
+    msg = (
+        f"Hi {first}, your shift at {client} was automatically clocked out by the system "
+        f"because you didn't clock out manually. Please check your times are correct and "
+        f"submit your shift notes if you haven't already."
+    )
+    sent = send_connecteam_chat(user_id, msg)
+    if not sent:
+        phone = get_worker_phone(user_id)
+        if phone:
+            send_msg(phone, msg)
+
+    if MANAGER_NUMBER and CT_KEY:
+        mgr = f"AUTO CLOCK-OUT: {worker} was force-clocked out from {client}. Worker notified."
+        send_msg(MANAGER_NUMBER, mgr)
+
+    print(f"  Auto clock-out alert sent to {worker} ({client})")
+
+
+def handle_shift_change(event_type, data):
+    """Alert manager when shifts are updated or deleted — roster manipulation detection."""
+    job_id  = data.get("jobId")
+    client  = get_job_name(job_id) if job_id else "unknown client"
+    verb    = "updated" if "update" in event_type.lower() else "deleted"
+    msg     = f"\U0001f4c5 Roster change: shift for {client} was {verb}.\n\nVerify this change was authorised."
+    print(f"  Shift {verb}: {client}")
+    if MANAGER_NUMBER and CT_KEY:
+        send_msg(MANAGER_NUMBER, msg)
+
+
+def handle_user_change(event_type, data):
+    """Alert manager on any HR change — user created, promoted, demoted, archived."""
+    user_id = data.get("userId")
+    name    = get_worker_name(user_id) if (user_id and CT_KEY) else str(user_id)
+    verb    = event_type.replace("user", "").strip().lower()
+    msg     = f"\U0001f464 HR change: {name} was {verb}. Verify this change was authorised."
+    print(f"  User change ({verb}): {name}")
+    if MANAGER_NUMBER and CT_KEY:
+        send_msg(MANAGER_NUMBER, msg)
+
+
 def handle_clock_out(data):
     """
     Fires when a worker clocks out. Sends an immediate reminder to submit notes.
@@ -218,7 +321,7 @@ class WebhookHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Connect Care webhook receiver — running.")
+        self.wfile.write(b"Connect Care webhook receiver - running.")
 
     def do_POST(self):
         length = int(self.headers.get("Content-Length", 0))
@@ -243,12 +346,24 @@ class WebhookHandler(BaseHTTPRequestHandler):
         data  = payload.get("data", {})
         print(f"Event: {event}")
 
-        if event in ("timeActivityClockOut", "Time activity clock out"):
+        if event in ("timeActivityClockIn", "Time activity clock in"):
+            handle_clock_in(data)
+        elif event in ("timeActivityClockOut", "Time activity clock out"):
             handle_clock_out(data)
+        elif event in ("timeActivityAutoClockOut", "Time activity auto clock out"):
+            handle_auto_clock_out(data)
+        elif event in ("timeActivityAdminEdit", "Time activity admin edit"):
+            handle_admin_time_edit(data)
+        elif event in ("timeActivityAdminAdd", "Time activity admin add"):
+            handle_admin_time_edit(data)  # same handler — both are admin time changes
         elif event in ("chatMessageCreated", "Chat message created"):
             handle_chat_reply(data)
         elif event in ("formSubmission", "Form Submission"):
             handle_form_submitted(data)
+        elif "shift" in event.lower():
+            handle_shift_change(event, data)
+        elif "user" in event.lower() and event.lower() not in ("chatmessagecreated",):
+            handle_user_change(event, data)
 
         self.send_response(200)
         self.end_headers()
