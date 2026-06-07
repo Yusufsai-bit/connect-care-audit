@@ -42,6 +42,7 @@ from connecteam_audit import (
     create_worker_task, fetch_task_boards,
     send_sms, send_whatsapp,
     register_webhooks, write_compliance_score,
+    auto_detect_ids, fetch_open_tasks, create_geofence,
 )
 
 # ── Page config ───────────────────────────────────────────────────────────────
@@ -469,6 +470,12 @@ with st.sidebar:
         else:
             st.caption("Deploy connecteam_webhook.py then add WEBHOOK_URL to secrets to enable real-time alerts.")
 
+        if st.button("🔍 Auto-Detect IDs"):
+            with st.spinner("Detecting..."):
+                detected = auto_detect_ids()
+            st.json(detected)
+            st.info("Copy these values into your Streamlit Cloud secrets.")
+
     st.divider()
 
     today     = datetime.date.today()
@@ -519,6 +526,20 @@ with st.sidebar:
     if st.button("Sign out", use_container_width=True):
         st.session_state.authenticated = False
         st.rerun()
+
+    st.divider()
+    with st.expander("📍 Add Client Geofence", expanded=False):
+        with st.form("geofence_form"):
+            gf_name   = st.text_input("Client name")
+            gf_lat    = st.number_input("Latitude", value=-37.8136, format="%.6f")
+            gf_lon    = st.number_input("Longitude", value=144.9631, format="%.6f")
+            gf_radius = st.number_input("Radius (metres)", value=200, min_value=50, max_value=1000)
+            if st.form_submit_button("Create Geofence"):
+                ok, result = create_geofence(gf_name, gf_lat, gf_lon, int(gf_radius))
+                if ok:
+                    st.success(f"Geofence created for {gf_name}")
+                else:
+                    st.error(f"Failed: {result}")
 
 # ── Build dataframe ───────────────────────────────────────────────────────────
 
@@ -591,7 +612,7 @@ st.markdown("<br>", unsafe_allow_html=True)
 
 init_notifications()
 
-tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
     "🚨  Action Required",
     "👤  By Worker",
     "👥  By Client",
@@ -599,6 +620,7 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
     "📋  All Issues",
     "📥  Export",
     "📬  Notifications",
+    "✅  Tasks",
 ])
 
 # ─────────────────────────────────────────────────
@@ -1426,3 +1448,47 @@ with tab7:
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=False,
             )
+
+# ─────────────────────────────────────────────────
+# TAB 8 — Tasks
+# ─────────────────────────────────────────────────
+with tab8:
+    st.markdown('<div class="section-title">Open Compliance Tasks</div>', unsafe_allow_html=True)
+    st.caption("View open tasks assigned to workers in Connecteam task boards.")
+
+    boards = load_task_boards()
+    if not boards:
+        st.info("No task boards found. Create one in Connecteam first.")
+    else:
+        selected_board = st.selectbox("Select task board", list(boards.keys()), key="tasks_board_select")
+        board_id = boards[selected_board]
+
+        if st.button("🔄 Load Tasks", key="load_tasks_btn"):
+            with st.spinner("Fetching tasks..."):
+                try:
+                    tasks = fetch_open_tasks(board_id)
+                    st.session_state["open_tasks"] = tasks
+                except Exception as e:
+                    st.error(f"Failed to load tasks: {e}")
+                    st.session_state["open_tasks"] = []
+
+        tasks = st.session_state.get("open_tasks")
+        if tasks is None:
+            st.info("Select a board and click Load Tasks.")
+        elif not tasks:
+            st.success("✅ No open tasks in this board.")
+        else:
+            task_rows = []
+            for t in tasks:
+                assigned = t.get("assignedUserIds") or t.get("userIds") or []
+                assigned_names = ", ".join(str(uid) for uid in assigned) if assigned else "(unassigned)"
+                task_rows.append({
+                    "Task":        t.get("title") or t.get("name") or "(no title)",
+                    "Status":      t.get("status", "open"),
+                    "Assigned To": assigned_names,
+                    "Due":         t.get("dueDate") or t.get("due") or "",
+                    "Created":     t.get("createdAt") or "",
+                })
+            tasks_df = pd.DataFrame(task_rows)
+            st.dataframe(tasks_df, use_container_width=True, hide_index=True)
+            st.caption(f"{len(tasks)} open task(s) in {selected_board}")
