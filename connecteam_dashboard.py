@@ -24,16 +24,24 @@ if _tw_sid:  os.environ["TWILIO_ACCOUNT_SID"]       = _tw_sid
 if _tw_tok:  os.environ["TWILIO_AUTH_TOKEN"]        = _tw_tok
 if _tw_num:  os.environ["TWILIO_NUMBER"]            = _tw_num
 if _tw_wa:   os.environ["TWILIO_WHATSAPP_NUMBER"]   = _tw_wa
-if _ct_sid:  os.environ["CONNECTEAM_SENDER_ID"]     = _ct_sid
+_ct_indicator = st.secrets.get("COMPLIANCE_INDICATOR_ID", "")
+_webhook_url  = st.secrets.get("WEBHOOK_URL", "")
+if _ct_sid:        os.environ["CONNECTEAM_SENDER_ID"]     = _ct_sid
+if _ct_indicator:  os.environ["COMPLIANCE_INDICATOR_ID"]  = _ct_indicator
+if _webhook_url:   os.environ["WEBHOOK_URL"]              = _webhook_url
 
-# Whether Connecteam Chat is ready to use
-CT_CHAT_READY = bool(_ct_sid)
+# Feature flags
+CT_CHAT_READY   = bool(_ct_sid)
+AI_NOTES_READY  = bool(st.secrets.get("ANTHROPIC_API_KEY", ""))
+SCORES_READY    = bool(_ct_indicator)
+WEBHOOK_URL     = _webhook_url
 
 from connecteam_audit import (
     run_audit, fetch_all_users, fetch_user_custom_fields,
     send_worker_message, add_worker_profile_note,
     create_worker_task, fetch_task_boards,
     send_sms, send_whatsapp,
+    register_webhooks, write_compliance_score,
 )
 
 # ── Page config ───────────────────────────────────────────────────────────────
@@ -439,6 +447,28 @@ def load_custom_field_docs():
 with st.sidebar:
     st.markdown("### 🛡️ Connect Care")
     st.markdown("##### Compliance Dashboard")
+    st.divider()
+
+    # ── System status ─────────────────────────────────────────────────────────
+    with st.expander("⚙️ System Status", expanded=False):
+        st.markdown(f"{'✅' if CT_CHAT_READY   else '⚠️'} **Connecteam Chat** {'Active' if CT_CHAT_READY   else '— upgrade Communications Hub'}")
+        st.markdown(f"{'✅' if AI_NOTES_READY  else '⚠️'} **AI Note Quality**  {'Active' if AI_NOTES_READY  else '— add ANTHROPIC_API_KEY to secrets'}")
+        st.markdown(f"{'✅' if SCORES_READY    else '⚠️'} **Compliance Scores** {'Active' if SCORES_READY  else '— add COMPLIANCE_INDICATOR_ID to secrets'}")
+        st.markdown(f"{'✅' if WEBHOOK_URL     else '⚠️'} **Real-time Webhooks** {'Active' if WEBHOOK_URL   else '— deploy webhook receiver & add WEBHOOK_URL'}")
+
+        if WEBHOOK_URL:
+            if st.button("🔗 Register Webhooks", help="Auto-register all compliance webhooks in Connecteam"):
+                with st.spinner("Registering..."):
+                    secret = st.secrets.get("WEBHOOK_SECRET", "")
+                    results = register_webhooks(WEBHOOK_URL, secret)
+                for ok, name, detail in results:
+                    if ok:
+                        st.success(f"✅ {name}")
+                    else:
+                        st.error(f"✗ {name}: {detail}")
+        else:
+            st.caption("Deploy connecteam_webhook.py then add WEBHOOK_URL to secrets to enable real-time alerts.")
+
     st.divider()
 
     today     = datetime.date.today()
