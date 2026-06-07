@@ -1,0 +1,43 @@
+name: Daily Compliance Audit & Notify
+
+on:
+  schedule:
+    # 9:00 PM UTC = 7:00 AM AEST (UTC+10) every day
+    - cron: "0 21 * * *"
+  workflow_dispatch:   # allows manual trigger from GitHub Actions tab
+
+jobs:
+  audit-and-notify:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run daily audit and send notifications
+        env:
+          CONNECTEAM_API_KEY:   ${{ secrets.CONNECTEAM_API_KEY }}
+          CONNECTEAM_SENDER_ID: ${{ secrets.CONNECTEAM_SENDER_ID }}
+          TWILIO_ACCOUNT_SID:   ${{ secrets.TWILIO_ACCOUNT_SID }}
+          TWILIO_AUTH_TOKEN:    ${{ secrets.TWILIO_AUTH_TOKEN }}
+          TWILIO_NUMBER:        ${{ secrets.TWILIO_NUMBER }}
+          MANAGER_NUMBER:       ${{ secrets.MANAGER_NUMBER }}
+        run: python daily_notify.py
+
+      - name: Commit updated notifications log
+        run: |
+          git config user.name  "Connect Care Bot"
+          git config user.email "bot@connectcare.com.au"
+          git add notifications_log.json
+          git diff --cached --quiet || git commit -m "chore: daily audit log $(date +'%Y-%m-%d') [skip ci]"
+          git push
