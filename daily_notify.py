@@ -16,6 +16,7 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from connecteam_audit import (
     run_audit, fetch_all_users, write_compliance_score,
+    lock_worker_days, add_worker_note, push_daily_info_note,
     send_worker_message, send_sms,
     CONNECTEAM_SENDER_ID, TWILIO_FROM_NUMBER,
     AEST,
@@ -134,6 +135,75 @@ def _write_scores(all_by_worker, contacts, now):
         print(f"Compliance scores written to Connecteam: {written} workers.")
     else:
         print("Compliance scores: skipped (COMPLIANCE_INDICATOR_ID not configured).")
+
+
+# ── Post-notification helpers ─────────────────────────────────────────────────
+
+def _lock_prior_days(contacts, now):
+    """Lock time entries for days 3+ days ago to prevent backdating."""
+    lock_date = (now - datetime.timedelta(days=3)).strftime("%Y-%m-%d")
+    locked = 0
+    for wname, winfo in contacts.items():
+        wid = winfo.get("userId")
+        if not wid:
+            continue
+        ok, _ = lock_worker_days(wid, [lock_date])
+        if ok:
+            locked += 1
+    if locked:
+        print(f"Locked time entries for {locked} workers on {lock_date}.")
+
+
+def _push_daily_info(issues, now, sent_count, failed_count):
+    """Push compliance summary to Connecteam Daily Info section."""
+    from collections import Counter
+    sev_counts = Counter(i.severity for i in issues)
+    lines = [
+        f"\U0001f4cb NDIS Compliance Audit — {now.strftime('%d %b %Y')}",
+        "",
+        f"\U0001f534 CRITICAL: {sev_counts.get('CRITICAL', 0)}  "
+        f"\U0001f7e0 HIGH: {sev_counts.get('HIGH', 0)}  "
+        f"\U0001f7e1 MEDIUM: {sev_counts.get('MEDIUM', 0)}  "
+        f"\U0001f7e2 LOW: {sev_counts.get('LOW', 0)}",
+        "",
+        f"Workers notified: {sent_count}  |  Failed: {failed_count}",
+    ]
+    if sev_counts.get("CRITICAL", 0) > 0:
+        crit = [i for i in issues if i.severity == "CRITICAL"][:3]
+        lines.append("")
+        lines.append("Critical items:")
+        for c in crit:
+            lines.append(f"  • {c.worker} — {c.category} ({c.client})")
+    text = "\n".join(lines)
+    ok, result = push_daily_info_note(text, now.strftime("%Y-%m-%d"))
+    if ok:
+        print("Daily Info note pushed to Connecteam.")
+    else:
+        print(f"Daily Info push skipped: {result}")
+
+
+def _add_critical_profile_notes(issues, contacts, now):
+    """Write a permanent note to the worker's Connecteam profile for CRITICAL breaches."""
+    # Group CRITICAL issues by worker
+    by_worker = {}
+    for iss in issues:
+        if iss.severity == "CRITICAL":
+            by_worker.setdefault(iss.worker, []).append(iss)
+
+    noted = 0
+    for wname, crit_issues in by_worker.items():
+        wid = (contacts.get(wname) or {}).get("userId")
+        if not wid:
+            continue
+        lines = [f"[{now.strftime('%d %b %Y')} — Automated Audit]"]
+        for iss in crit_issues[:5]:
+            lines.append(f"CRITICAL — {iss.category}: {iss.client} on {iss.date}. {iss.detail}")
+        note_text = "\n".join(lines)
+        ok, _ = add_worker_note(wid, note_text)
+        if ok:
+            noted += 1
+    if noted:
+        print(f"Critical breach notes added to {noted} worker profiles.")
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -290,6 +360,15 @@ def main():
 
     # ── Write compliance scores to Connecteam ─────────────────────────────
     _write_scores(all_by_worker, contacts, now)
+
+    # ── Lock time entries for days > 2 days ago ───────────────────────────
+    _lock_prior_days(contacts, now)
+
+    # ── Push compliance summary to Connecteam Daily Info ─────────────────
+    _push_daily_info(issues, now, len(sent_ok), len(sent_err))
+
+    # ── Add profile notes for CRITICAL breaches ───────────────────────────
+    _add_critical_profile_notes(issues, contacts, now)
 
 
 if __name__ == "__main__":
