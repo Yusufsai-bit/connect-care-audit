@@ -289,19 +289,28 @@ def handle_clock_out(data):
 
 
 def handle_chat_reply(data):
-    """Worker replied to a compliance notification — mark acknowledged."""
+    """Worker replied — mark acknowledged and forward to all observers via Connecteam Chat."""
     user_id = data.get("userId") or data.get("senderId")
     text    = data.get("text", "")
     if not user_id:
         return
+
+    # Ignore messages from observers themselves to prevent feedback loops
+    OBSERVER_IDS = [2149475, 9736871, 2201497]  # Yusuf, Nada, Faduma
+    if int(user_id) in OBSERVER_IDS:
+        return
+
     updated = mark_acknowledged(user_id)
     worker  = get_worker_name(user_id) if CT_KEY else str(user_id)
     print(f"  Chat reply from {worker}: '{text[:80]}' — acknowledged: {updated}")
 
-    # Forward reply to manager
-    if MANAGER_NUMBER and CT_KEY:
-        mgr_msg = f"Reply from {worker}:\n\n{text}"
-        send_msg(MANAGER_NUMBER, mgr_msg)
+    # Forward to all observers via Connecteam Chat
+    sender_id = int(os.environ.get("CONNECTEAM_SENDER_ID", "0") or "0")
+    if sender_id and CT_KEY:
+        fwd = f"{worker} replied:\n\n{text}"
+        for oid in OBSERVER_IDS:
+            if str(oid) != str(user_id):
+                send_connecteam_chat(oid, fwd)
 
 
 def handle_form_submitted(data):
