@@ -29,7 +29,8 @@ TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID", "")
 TWILIO_AUTH_TOKEN  = os.environ.get("TWILIO_AUTH_TOKEN", "")
 TWILIO_FROM_NUMBER    = os.environ.get("TWILIO_NUMBER", "")
 TWILIO_WA_NUMBER      = os.environ.get("TWILIO_WHATSAPP_NUMBER", TWILIO_FROM_NUMBER)
-CONNECTEAM_SENDER_ID  = int(os.environ.get("CONNECTEAM_SENDER_ID", "0") or "0")
+CONNECTEAM_SENDER_ID      = int(os.environ.get("CONNECTEAM_SENDER_ID", "0") or "0")
+COMPLIANCE_INDICATOR_ID   = int(os.environ.get("COMPLIANCE_INDICATOR_ID", "0") or "0")
 
 BASE_URL       = "https://api.connecteam.com"
 TIME_CLOCK_ID  = 1776332
@@ -329,6 +330,128 @@ def ct_post(path, body):
         return False, f"HTTP {e.response.status_code}: {detail}"
     except Exception as e:
         return False, str(e)
+
+
+def ct_put(path, body):
+    """PUT helper — returns (True, response_json) or (False, error_string)."""
+    try:
+        r = requests.put(
+            f"{BASE_URL}{path}",
+            headers={
+                "X-API-KEY":    CONNECTEAM_API_KEY,
+                "Accept":       "application/json",
+                "Content-Type": "application/json",
+            },
+            json=body,
+            timeout=30,
+        )
+        r.raise_for_status()
+        return True, r.json()
+    except requests.exceptions.HTTPError as e:
+        try:
+            detail = e.response.json()
+        except Exception:
+            detail = e.response.text
+        return False, f"HTTP {e.response.status_code}: {detail}"
+    except Exception as e:
+        return False, str(e)
+
+
+def fetch_worker_credentials(users):
+    """
+    Reads document expiry dates from Connecteam user custom fields.
+    Returns dict: user_id -> {credential_type -> date}
+    """
+    DOC_KEYWORDS = {
+        "NDIS Worker Screening":       ["ndis", "screening", "worker screening"],
+        "Working With Children Check": ["wwcc", "working with children", "children check"],
+        "Police Check":                ["police"],
+        "First Aid Certificate":       ["first aid"],
+        "CPR Certificate":             ["cpr"],
+        "Manual Handling":             ["manual handling"],
+    }
+    try:
+        fields = fetch_user_custom_fields()
+    except Exception:
+        return {}
+
+    cred_fields = {}
+    for field in fields:
+        fname = (field.get("name") or "").lower()
+        for cred_type, keywords in DOC_KEYWORDS.items():
+            if any(kw in fname for kw in keywords):
+                fid = field.get("customFieldId") or field.get("id")
+                if fid:
+                    cred_fields[str(fid)] = cred_type
+                break
+
+    if not cred_fields:
+        return {}
+
+    result = {}
+    for uid, udata in users.items():
+        custom_vals = udata.get("customFields", udata.get("customFieldValues", []))
+        if not custom_vals:
+            continue
+        creds = {}
+        for val in (custom_vals if isinstance(custom_vals, list) else []):
+            fid = str(val.get("customFieldId") or val.get("fieldId") or "")
+            if fid not in cred_fields:
+                continue
+            raw = val.get("value") or val.get("dateValue") or ""
+            if not raw:
+                continue
+            for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%m/%d/%Y"):
+                try:
+                    from datetime import date as _date
+                    expiry = datetime.strptime(str(raw)[:10], fmt).date()
+                    creds[cred_fields[fid]] = expiry
+                    break
+                except ValueError:
+                    continue
+        if creds:
+            result[uid] = creds
+    return result
+
+
+def write_compliance_score(user_id, score, date_str=None):
+    """
+    Write a compliance score (0-100) to the worker's Connecteam performance profile.
+    Requires COMPLIANCE_INDICATOR_ID — create a 'Compliance Score' performance
+    indicator in Connecteam (Settings → Performance) then set the env var.
+    Returns (True, response) or (False, error_string).
+    """
+    if not COMPLIANCE_INDICATOR_ID:
+        return False, "COMPLIANCE_INDICATOR_ID not set — create indicator in Connecteam Settings → Performance."
+    if date_str is None:
+        date_str = datetime.now(AEST).strftime("%Y-%m-%d")
+    return ct_put(
+        f"/users/v1/users/{user_id}/performance/{date_str}",
+        {"indicators": [{"indicatorId": COMPLIANCE_INDICATOR_ID, "value": round(float(score), 1)}]},
+    )
+
+
+def register_webhooks(webhook_url, secret=""):
+    """
+    Programmatically register all compliance webhooks in Connecteam.
+    Call from dashboard 'Setup Webhooks' button after deploying connecteam_webhook.py.
+    Returns list of (ok, name, detail) tuples.
+    """
+    targets = [
+        {"name": "Compliance — Clock Out",      "featureType": "time_activity", "entityId": str(TIME_CLOCK_ID)},
+        {"name": "Compliance — Form Submitted",  "featureType": "forms"},
+        {"name": "Compliance — Chat Reply",      "featureType": "chat"},
+    ]
+    results = []
+    for t in targets:
+        body = {"name": t["name"], "url": webhook_url, "isDisabled": False, "featureType": t["featureType"]}
+        if secret:
+            body["secretKey"] = secret
+        if "entityId" in t:
+            body["entityId"] = t["entityId"]
+        ok, detail = ct_post("/settings/v1/webhooks", body)
+        results.append((ok, t["name"], detail))
+    return results
 
 
 def send_worker_message(user_id, text):
@@ -1309,6 +1432,36 @@ def run_audit(days_back=7):
                     end_date,
                     f"Worker clocked in for '{client}' but is not formally assigned to this client in Connecteam HR. "
                     "Verify this was authorised by management."))
+
+    # ------------------------------------------
+    # SECTION 8 -- WORKER CREDENTIAL EXPIRY
+    # ------------------------------------------
+    try:
+        cred_data = fetch_worker_credentials(users)
+        today     = now.date()
+        for uid, creds in cred_data.items():
+            wname = uname(uid)
+            for cred_type, expiry_date in creds.items():
+                days_left = (expiry_date - today).days
+                dlabel_c  = now.strftime("%a %d-%b")
+                if days_left < 0:
+                    issues.append(Issue("CRITICAL", "EXPIRED CREDENTIAL", wname,
+                        "(all clients)", dlabel_c,
+                        f"{cred_type} expired {abs(days_left)} day(s) ago on "
+                        f"{expiry_date.strftime('%d %b %Y')}. Worker must NOT provide "
+                        "supports until credential is renewed."))
+                elif days_left <= 30:
+                    issues.append(Issue("HIGH", "CREDENTIAL EXPIRING SOON", wname,
+                        "(all clients)", dlabel_c,
+                        f"{cred_type} expires in {days_left} day(s) on "
+                        f"{expiry_date.strftime('%d %b %Y')}. Action required within 2 weeks."))
+                elif days_left <= 60:
+                    issues.append(Issue("MEDIUM", "CREDENTIAL EXPIRING SOON", wname,
+                        "(all clients)", dlabel_c,
+                        f"{cred_type} expires in {days_left} day(s) on "
+                        f"{expiry_date.strftime('%d %b %Y')}. Begin renewal process now."))
+    except Exception as e:
+        print(f"  [WARNING] Credential expiry check failed: {e}")
 
     # ------------------------------------------
     # PRINT REPORT
