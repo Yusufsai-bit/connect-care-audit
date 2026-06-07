@@ -17,12 +17,17 @@ _tw_sid  = st.secrets.get("TWILIO_ACCOUNT_SID", "")
 _tw_tok  = st.secrets.get("TWILIO_AUTH_TOKEN", "")
 _tw_num  = st.secrets.get("TWILIO_NUMBER", "")
 _tw_wa   = st.secrets.get("TWILIO_WHATSAPP_NUMBER", "")
+_ct_sid  = st.secrets.get("CONNECTEAM_SENDER_ID", "")
 if _ct_key:  os.environ["CONNECTEAM_API_KEY"]       = _ct_key
 if _ai_key:  os.environ["ANTHROPIC_API_KEY"]        = _ai_key
 if _tw_sid:  os.environ["TWILIO_ACCOUNT_SID"]       = _tw_sid
 if _tw_tok:  os.environ["TWILIO_AUTH_TOKEN"]        = _tw_tok
 if _tw_num:  os.environ["TWILIO_NUMBER"]            = _tw_num
 if _tw_wa:   os.environ["TWILIO_WHATSAPP_NUMBER"]   = _tw_wa
+if _ct_sid:  os.environ["CONNECTEAM_SENDER_ID"]     = _ct_sid
+
+# Whether Connecteam Chat is ready to use
+CT_CHAT_READY = bool(_ct_sid)
 
 from connecteam_audit import (
     run_audit, fetch_all_users, fetch_user_custom_fields,
@@ -710,18 +715,21 @@ with tab2:
                 default_msg      = build_notify_message(selected_worker, wdf, period_label_str)
 
                 with st.expander("Compose & send message", expanded=False):
+                    _ct_chat_label = "💬 Connecteam Chat" if CT_CHAT_READY else "💬 Connecteam Chat (upgrade required)"
                     msg_channel = st.radio(
                         "Send via",
-                        ["WhatsApp", "SMS"],
+                        [_ct_chat_label, "WhatsApp", "SMS"],
                         horizontal=True,
                         key=f"chan_{selected_worker}",
-                        help="Sandbox = testing only (worker must have joined sandbox first). SMS works immediately.",
                     )
+                    if msg_channel == _ct_chat_label and not CT_CHAT_READY:
+                        st.info("💡 Connecteam Chat requires the Communications Hub Expert plan. Once upgraded, add `CONNECTEAM_SENDER_ID` to secrets (Settings → Feed settings in Connecteam).")
                     worker_phone = worker_info.get("phone", "")
-                    if worker_phone:
-                        st.caption(f"Sending to: {worker_phone}")
-                    else:
-                        st.warning("No phone number on file for this worker.")
+                    if msg_channel != _ct_chat_label:
+                        if worker_phone:
+                            st.caption(f"Sending to: {worker_phone}")
+                        else:
+                            st.warning("No phone number on file for this worker.")
 
                     edited_msg = st.text_area(
                         "Message",
@@ -759,19 +767,28 @@ with tab2:
                         errors = []
                         worker_phone = worker_info.get("phone", "").strip()
 
-                        # 1. Send via Twilio (WhatsApp sandbox or SMS)
-                        if not worker_phone:
-                            errors.append("No phone number on file for this worker in Connecteam.")
-                            ok = False
+                        # 1. Send message via chosen channel
+                        if "Connecteam Chat" in msg_channel:
+                            if not CT_CHAT_READY:
+                                errors.append("Connecteam Chat not configured — upgrade plan and add CONNECTEAM_SENDER_ID to secrets.")
+                                ok = False
+                            else:
+                                ok, err = send_worker_message(worker_user_id, edited_msg)
+                                if not ok: errors.append(f"Connecteam Chat failed: {err}")
                         elif msg_channel == "WhatsApp":
-                            ok, err = send_whatsapp(worker_phone, edited_msg, sandbox=False)
-                            if not ok: errors.append(f"WhatsApp failed: {err}")
-                        elif msg_channel == "WhatsApp":
-                            ok, err = send_whatsapp(worker_phone, edited_msg, sandbox=False)
-                            if not ok: errors.append(f"WhatsApp failed: {err}")
+                            if not worker_phone:
+                                errors.append("No phone number on file.")
+                                ok = False
+                            else:
+                                ok, err = send_whatsapp(worker_phone, edited_msg, sandbox=False)
+                                if not ok: errors.append(f"WhatsApp failed: {err}")
                         else:
-                            ok, err = send_sms(worker_phone, edited_msg)
-                            if not ok: errors.append(f"SMS failed: {err}")
+                            if not worker_phone:
+                                errors.append("No phone number on file.")
+                                ok = False
+                            else:
+                                ok, err = send_sms(worker_phone, edited_msg)
+                                if not ok: errors.append(f"SMS failed: {err}")
 
                         # 2. Add HR profile note
                         note_ok = False
@@ -1144,12 +1161,15 @@ with tab7:
         period_label_bulk = f"{start_date.strftime('%d %b')} – {end_date.strftime('%d %b %Y')}"
 
         if bulk_workers:
+            _bulk_ct_label = "💬 Connecteam Chat" if CT_CHAT_READY else "💬 Connecteam Chat (upgrade required)"
             bulk_channel = st.radio(
                 "Send via",
-                ["WhatsApp", "SMS"],
+                [_bulk_ct_label, "WhatsApp", "SMS"],
                 horizontal=True,
                 key="bulk_channel",
             )
+            if "Connecteam Chat" in bulk_channel and not CT_CHAT_READY:
+                st.info("💡 Connecteam Chat requires Communications Hub Expert plan + CONNECTEAM_SENDER_ID in secrets.")
             st.caption(f"Will send {len(bulk_workers)} message(s). Each worker gets a personalised message listing only their own issues.")
             if st.button("📤  Send to All Selected", type="primary"):
                 sent_ok, sent_fail = [], []
@@ -1157,17 +1177,25 @@ with tab7:
                     winfo  = contacts.get(wname, {})
                     wid    = winfo.get("userId")
                     wphone = winfo.get("phone", "").strip()
-                    if not wphone:
-                        sent_fail.append(f"{wname} (no phone number)")
-                        continue
                     wdf = df_staff[
                         (df_staff["Worker"] == wname) &
                         (df_staff["Severity"].isin(["CRITICAL","HIGH"]))
                     ][["Severity","Issue","Client","Date","Detail"]]
                     msg = build_notify_message(wname, wdf, period_label_bulk.lower())
-                    if bulk_channel == "WhatsApp":
+                    if "Connecteam Chat" in bulk_channel:
+                        if not CT_CHAT_READY:
+                            sent_fail.append(f"{wname} (Connecteam Chat not configured)")
+                            continue
+                        ok, err = send_worker_message(wid, msg)
+                    elif bulk_channel == "WhatsApp":
+                        if not wphone:
+                            sent_fail.append(f"{wname} (no phone number)")
+                            continue
                         ok, err = send_whatsapp(wphone, msg, sandbox=False)
                     else:
+                        if not wphone:
+                            sent_fail.append(f"{wname} (no phone number)")
+                            continue
                         ok, err = send_sms(wphone, msg)
                     if ok:
                         log_notification(wname, wid, wdf, msg, period_label_bulk)
@@ -1185,9 +1213,10 @@ with tab7:
     pending = [n for n in notifs if n["status"] == "Sent"]
     if pending:
         with st.expander(f"📩 Send Reminders — {len(pending)} worker(s) haven't replied yet"):
+            _rem_ct_label = "💬 Connecteam Chat" if CT_CHAT_READY else "💬 Connecteam Chat (upgrade required)"
             reminder_channel = st.radio(
                 "Send via",
-                ["WhatsApp", "SMS"],
+                [_rem_ct_label, "WhatsApp", "SMS"],
                 horizontal=True,
                 key="reminder_channel",
             )
@@ -1199,14 +1228,23 @@ with tab7:
                 ok_r, fail_r = [], []
                 for n in pending:
                     winfo  = contacts_r.get(n["worker"], {})
+                    wid    = winfo.get("userId")
                     wphone = winfo.get("phone", "").strip()
-                    if not wphone:
-                        fail_r.append(f"{n['worker']} (no phone)")
-                        continue
                     msg = build_reminder_message(n["worker"])
-                    if reminder_channel == "WhatsApp":
+                    if "Connecteam Chat" in reminder_channel:
+                        if not CT_CHAT_READY:
+                            fail_r.append(f"{n['worker']} (Connecteam Chat not configured)")
+                            continue
+                        ok, err = send_worker_message(wid, msg)
+                    elif reminder_channel == "WhatsApp":
+                        if not wphone:
+                            fail_r.append(f"{n['worker']} (no phone)")
+                            continue
                         ok, err = send_whatsapp(wphone, msg, sandbox=False)
                     else:
+                        if not wphone:
+                            fail_r.append(f"{n['worker']} (no phone)")
+                            continue
                         ok, err = send_sms(wphone, msg)
                     if ok:
                         ok_r.append(n["worker"])

@@ -29,6 +29,7 @@ TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID", "")
 TWILIO_AUTH_TOKEN  = os.environ.get("TWILIO_AUTH_TOKEN", "")
 TWILIO_FROM_NUMBER    = os.environ.get("TWILIO_NUMBER", "")
 TWILIO_WA_NUMBER      = os.environ.get("TWILIO_WHATSAPP_NUMBER", TWILIO_FROM_NUMBER)
+CONNECTEAM_SENDER_ID  = int(os.environ.get("CONNECTEAM_SENDER_ID", "0") or "0")
 
 BASE_URL       = "https://api.connecteam.com"
 TIME_CLOCK_ID  = 1776332
@@ -333,13 +334,20 @@ def ct_post(path, body):
 def send_worker_message(user_id, text):
     """
     Send a private Connecteam chat message to the given worker.
-    Returns (True, None) on success or (False, error_string) on failure.
+    Requires Communications Hub Expert plan + a custom publisher configured in
+    Settings → Feed settings. Set CONNECTEAM_SENDER_ID to that publisher's ID.
+    Returns (True, message_id) on success or (False, error_string) on failure.
     """
+    if not CONNECTEAM_SENDER_ID:
+        return False, "CONNECTEAM_SENDER_ID not set — create a custom publisher in Connecteam Settings → Feed settings and add its ID to secrets."
     ok, result = ct_post(
         f"/chat/v1/conversations/privateMessage/{user_id}",
-        {"text": text[:1000]},
+        {"senderId": CONNECTEAM_SENDER_ID, "text": text[:1000]},
     )
-    return ok, None if ok else result
+    if ok:
+        msg_id = result.get("data", {}).get("messageId") or result.get("messageId")
+        return True, msg_id
+    return False, result
 
 
 def add_worker_profile_note(user_id, text, title="Compliance Notification"):
