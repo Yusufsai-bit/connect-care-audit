@@ -91,8 +91,8 @@ def build_credential_message(worker_name, cred_issues):
     return "\n".join(lines)
 
 
-def send(worker_id, text):
-    return send_worker_message(worker_id, text)
+def send(worker_id, text, worker_name=None):
+    return send_worker_message(worker_id, text, worker_name=worker_name)
 
 
 def calc_compliance_score(issues_list):
@@ -301,7 +301,7 @@ def main():
         else:
             all_sent = True
             for msg in msgs_to_send:
-                ok, result = send(wid, msg)
+                ok, result = send(wid, msg, worker_name=wname)
                 if not ok:
                     print(f"  ✗ Failed {wname}: {result}")
                     all_sent = False
