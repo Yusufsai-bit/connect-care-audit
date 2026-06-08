@@ -2,9 +2,13 @@ name: Daily Compliance Audit & Notify
 
 on:
   schedule:
-    # 9:00 PM UTC = 7:00 AM AEST (UTC+10) every day
+    # 9:00 PM UTC = 7:00 AM AEST / 8:00 AM AEDT — runs at 7-8 AM Melbourne time
     - cron: "0 21 * * *"
-  workflow_dispatch:   # allows manual trigger from GitHub Actions tab
+  workflow_dispatch:
+
+concurrency:
+  group: compliance-log
+  cancel-in-progress: false
 
 jobs:
   audit-and-notify:
@@ -41,4 +45,5 @@ jobs:
           git config user.email "bot@connectcare.com.au"
           git add notifications_log.json
           git diff --cached --quiet || git commit -m "chore: daily audit log $(date +'%Y-%m-%d') [skip ci]"
+          git pull --rebase origin main
           git push
