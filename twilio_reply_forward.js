@@ -12,7 +12,7 @@
  *      → "When a message comes in" → paste the URL
  *
  * Environment variable to set in the Function (Configuration → Environment Variables):
- *   MANAGER_NUMBER  =  +61481140097
+ *   MANAGER_NUMBER  =  your mobile number (e.g. +614xxxxxxxx)
  */
 
 exports.handler = function (context, event, callback) {
