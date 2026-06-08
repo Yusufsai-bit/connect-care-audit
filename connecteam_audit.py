@@ -973,7 +973,12 @@ Return ONLY a valid JSON array. No explanation, no markdown."""
             max_tokens=4096,
             messages=[{"role": "user", "content": prompt}],
         )
-        results = json.loads(response.content[0].text)
+        raw = response.content[0].text.strip()
+        # Strip markdown code fences if present
+        if raw.startswith("```"):
+            raw = raw.split("\n", 1)[1] if "\n" in raw else raw
+            raw = raw.rsplit("```", 1)[0].strip()
+        results = json.loads(raw)
         return {r["id"]: r for r in results}
     except Exception as e:
         print(f"  [WARNING] Claude assessment failed: {e}")
