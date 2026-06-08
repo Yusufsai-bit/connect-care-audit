@@ -43,6 +43,7 @@ from connecteam_audit import (
     send_sms, send_whatsapp,
     register_webhooks, write_compliance_score,
     auto_detect_ids, fetch_open_tasks, create_geofence,
+    detect_worker_conversations, load_worker_conversations,
 )
 
 # ── Page config ───────────────────────────────────────────────────────────────
@@ -475,6 +476,23 @@ with st.sidebar:
                 detected = auto_detect_ids()
             st.json(detected)
             st.info("Copy these values into your Streamlit Cloud secrets.")
+
+        st.markdown("---")
+        st.markdown("**Group Chat Routing**")
+        conv_map = load_worker_conversations()
+        if conv_map:
+            st.markdown(f"✅ {len(conv_map)} worker group conversation(s) mapped")
+        else:
+            st.markdown("⚠️ No group conversations mapped yet")
+            st.caption("Create one group per worker in Connecteam (worker + Yusuf + Nada + Faduma), then detect below.")
+        if st.button("🔄 Detect Group Chats", help="Scan Connecteam conversations to find per-worker compliance groups"):
+            with st.spinner("Scanning conversations..."):
+                mapping = detect_worker_conversations()
+            if mapping:
+                st.success(f"Found {len(mapping)} group conversation(s)")
+                st.json(mapping)
+            else:
+                st.warning("No compliance group conversations detected. Create groups first in the Connecteam app.")
 
     st.divider()
 
