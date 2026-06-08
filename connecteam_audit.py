@@ -563,31 +563,35 @@ def register_webhooks(webhook_url, secret=""):
     """
     Programmatically register all compliance webhooks in Connecteam.
     Returns list of (ok, name, detail) tuples.
+
+    Note: scheduler and chat webhooks cannot be registered via the v1 API
+    (different versioning) — register those manually in Connecteam Settings.
     """
     targets = [
-        # Time clock events
-        {"name": "Compliance — Clock In",           "featureType": "time_activity", "entityId": str(TIME_CLOCK_ID)},
-        {"name": "Compliance — Clock Out",          "featureType": "time_activity", "entityId": str(TIME_CLOCK_ID)},
-        {"name": "Compliance — Auto Clock Out",     "featureType": "time_activity", "entityId": str(TIME_CLOCK_ID)},
-        {"name": "Compliance — Admin Time Edit",    "featureType": "time_activity", "entityId": str(TIME_CLOCK_ID)},
-        {"name": "Compliance — Admin Time Add",     "featureType": "time_activity", "entityId": str(TIME_CLOCK_ID)},
-        # Scheduler events
-        {"name": "Compliance — Shifts Updated",     "featureType": "scheduler"},
-        {"name": "Compliance — Shifts Deleted",     "featureType": "scheduler"},
+        # Time clock events — featureType + eventTypes both required
+        {"name": "Compliance — Clock In",        "featureType": "time_activity", "eventTypes": ["clock_in"]},
+        {"name": "Compliance — Clock Out",       "featureType": "time_activity", "eventTypes": ["clock_out"]},
+        {"name": "Compliance — Auto Clock Out",  "featureType": "time_activity", "eventTypes": ["auto_clock_out"]},
+        {"name": "Compliance — Admin Time Edit", "featureType": "time_activity", "eventTypes": ["admin_edit"]},
+        {"name": "Compliance — Admin Time Add",  "featureType": "time_activity", "eventTypes": ["admin_add"]},
         # Forms
-        {"name": "Compliance — Form Submitted",     "featureType": "forms"},
-        # Chat
-        {"name": "Compliance — Chat Reply",         "featureType": "chat"},
-        # User events
-        {"name": "Compliance — User Changes",       "featureType": "users"},
+        {"name": "Compliance — Form Submitted",  "featureType": "forms",         "eventTypes": ["form_submission"]},
+        # User HR events
+        {"name": "Compliance — User Created",    "featureType": "users",         "eventTypes": ["user_created"]},
+        {"name": "Compliance — User Updated",    "featureType": "users",         "eventTypes": ["user_updated"]},
+        {"name": "Compliance — User Archived",   "featureType": "users",         "eventTypes": ["user_archived"]},
     ]
     results = []
     for t in targets:
-        body = {"name": t["name"], "url": webhook_url, "isDisabled": False, "featureType": t["featureType"]}
+        body = {
+            "name":        t["name"],
+            "url":         webhook_url,
+            "isDisabled":  False,
+            "featureType": t["featureType"],
+            "eventTypes":  t["eventTypes"],
+        }
         if secret:
             body["secretKey"] = secret
-        if "entityId" in t:
-            body["entityId"] = t["entityId"]
         ok, detail = ct_post("/settings/v1/webhooks", body)
         results.append((ok, t["name"], detail))
     return results
