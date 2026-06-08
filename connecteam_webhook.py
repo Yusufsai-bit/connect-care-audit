@@ -340,10 +340,6 @@ def handle_auto_clock_out(data):
         if phone:
             send_msg(phone, msg)
 
-    if MANAGER_NUMBER and CT_KEY:
-        mgr = f"AUTO CLOCK-OUT: {worker} was force-clocked out from {client}. Worker notified."
-        send_msg(MANAGER_NUMBER, mgr)
-
     print(f"  Auto clock-out alert sent to {worker} ({client})")
 
 
@@ -389,8 +385,7 @@ def handle_clock_out(data):
 
     activity = fetch_latest_activity(user_id)
 
-    worker_flags = []   # messages sent to the worker
-    manager_flags = []  # alerts sent to manager only
+    worker_flags = []
 
     if activity:
         clock_in  = (activity.get("start") or {}).get("timestamp", 0)
@@ -403,10 +398,6 @@ def handle_clock_out(data):
                 worker_flags.append(
                     f"your shift was only {round(duration_min)} min "
                     f"— please check your times are correct"
-                )
-                manager_flags.append(
-                    f"SHORT SHIFT: {worker_name} clocked {round(duration_min)} min "
-                    f"at {client_name} — possible clock error."
                 )
 
         # --- GPS check ---
@@ -432,15 +423,10 @@ def handle_clock_out(data):
                             f"your GPS at clock-in was {dist:.1f}km from "
                             f"{client_name}'s address — please confirm you were at the right location"
                         )
-                        manager_flags.append(
-                            f"GPS MISMATCH: {worker_name} clocked in "
-                            f"{dist:.1f}km from {client_name} "
-                            f"(address: {loc.get('address', 'unknown')})."
-                        )
 
         # --- Notes check ---
-        attachments  = activity.get("shiftAttachments") or []
-        note_text    = get_note_text(attachments)
+        attachments   = activity.get("shiftAttachments") or []
+        note_text     = get_note_text(attachments)
         notes_missing = not note_text or len(note_text.split()) < 10
     else:
         notes_missing = True  # couldn't fetch activity — assume notes pending
@@ -467,11 +453,6 @@ def handle_clock_out(data):
         phone = get_worker_phone(user_id)
         if phone:
             send_msg(phone, msg)
-
-    # Manager alerts for serious flags
-    for alert in manager_flags:
-        if MANAGER_NUMBER and CT_KEY:
-            send_msg(MANAGER_NUMBER, f"COMPLIANCE ALERT\n{alert}")
 
     print(f"  Clock-out check: {worker_name} ({client_name}) — flags: {worker_flags}")
 
