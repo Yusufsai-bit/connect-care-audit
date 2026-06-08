@@ -19,6 +19,8 @@ from datetime import datetime, timezone, timedelta
 from collections import defaultdict
 from difflib import SequenceMatcher
 
+WORKER_CONVERSATIONS_FILE = os.path.join(os.path.dirname(__file__), "worker_conversations.json")
+
 # ---------------------------------------------
 # CONFIG
 # ---------------------------------------------
@@ -591,14 +593,100 @@ def register_webhooks(webhook_url, secret=""):
     return results
 
 
+def fetch_conversations():
+    """Return all chat conversations this account can see."""
+    conversations = []
+    page = 1
+    while True:
+        data = ct_get("/chat/v1/conversations", {"page": page, "limit": 100})
+        items = (data.get("data") or {}).get("conversations") or data.get("conversations") or []
+        if not items:
+            break
+        conversations.extend(items)
+        total = (data.get("data") or {}).get("total") or data.get("total") or 0
+        if len(conversations) >= total or not items:
+            break
+        page += 1
+    return conversations
+
+
+def load_worker_conversations():
+    """Load worker_id → conversation_id mapping from disk. Returns {} if file missing."""
+    try:
+        with open(WORKER_CONVERSATIONS_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def save_worker_conversations(mapping):
+    """Persist worker_id → conversation_id mapping to disk."""
+    with open(WORKER_CONVERSATIONS_FILE, "w", encoding="utf-8") as f:
+        json.dump(mapping, f, indent=2)
+
+
+def detect_worker_conversations():
+    """
+    Scan all Connecteam group conversations to find per-worker compliance groups.
+    A compliance group is identified by having at least one COMPLIANCE_OBSERVER_ID
+    member and exactly one non-observer participant (the worker).
+    Saves and returns {str(worker_user_id): conversation_id}.
+    """
+    convs   = fetch_conversations()
+    obs_set = {str(oid) for oid in COMPLIANCE_OBSERVER_IDS}
+    mapping = {}
+
+    for conv in convs:
+        # Normalise — API may nest data differently across versions
+        c       = conv.get("data") or conv
+        conv_id = c.get("conversationId") or c.get("id")
+        members = c.get("members") or c.get("participants") or []
+        if not conv_id or len(members) < 2:
+            continue
+
+        member_ids = {str(m.get("userId") or m.get("id") or "") for m in members}
+        member_ids.discard("")
+
+        workers = member_ids - obs_set
+        has_obs = bool(member_ids & obs_set)
+
+        # Group must have at least one observer and exactly one worker
+        if has_obs and len(workers) == 1:
+            worker_id = workers.pop()
+            mapping[worker_id] = conv_id
+
+    save_worker_conversations(mapping)
+    return mapping
+
+
 def send_worker_message(user_id, text, worker_name=None):
     """
-    Send a private Connecteam chat message to the given worker, then CC all
-    COMPLIANCE_OBSERVER_IDS with a copy showing who it was sent to.
+    Send a Connecteam chat message to the worker.
+    If a per-worker compliance group conversation exists (detected via
+    detect_worker_conversations), sends to that group — so the worker and all
+    management observers (Yusuf, Nada, Faduma) see it in one shared thread.
+    Falls back to a private message + separate CC to each observer if no group
+    conversation mapping is found.
     Returns (True, message_id) on success or (False, error_string) on failure.
     """
     if not CONNECTEAM_SENDER_ID:
         return False, "CONNECTEAM_SENDER_ID not set."
+
+    conv_map = load_worker_conversations()
+    conv_id  = conv_map.get(str(user_id))
+
+    if conv_id:
+        # Route to the per-worker group conversation
+        ok, result = ct_post(
+            f"/chat/v1/conversations/{conv_id}/message",
+            {"senderId": CONNECTEAM_SENDER_ID, "text": text[:1000]},
+        )
+        if not ok:
+            return False, result
+        msg_id = (result.get("data") or {}).get("messageId") or result.get("messageId")
+        return True, msg_id
+
+    # Fallback: private message to worker + separate CC to each observer
     ok, result = ct_post(
         f"/chat/v1/conversations/privateMessage/{user_id}",
         {"senderId": CONNECTEAM_SENDER_ID, "text": text[:1000]},
@@ -607,11 +695,10 @@ def send_worker_message(user_id, text, worker_name=None):
         return False, result
     msg_id = (result.get("data") or {}).get("messageId") or result.get("messageId")
 
-    # CC management observers
-    label = worker_name or f"User {user_id}"
+    label   = worker_name or f"User {user_id}"
     cc_text = f"CC — sent to {label}:\n\n{text[:900]}"
     for oid in COMPLIANCE_OBSERVER_IDS:
-        if str(oid) != str(user_id):   # don't double-message if observer is the worker
+        if str(oid) != str(user_id):
             ct_post(
                 f"/chat/v1/conversations/privateMessage/{oid}",
                 {"senderId": CONNECTEAM_SENDER_ID, "text": cc_text},
