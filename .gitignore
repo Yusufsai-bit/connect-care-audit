@@ -2,4 +2,4 @@
 __pycache__/
 *.pyc
 .env
-worker_conversations.json
+# worker_conversations.json is intentionally committed — needed by GitHub Actions
