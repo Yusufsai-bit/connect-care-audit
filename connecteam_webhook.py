@@ -288,8 +288,24 @@ def handle_clock_out(data):
     print(f"  Clock-out reminder sent to {worker_name} ({client_name})")
 
 
+def load_worker_conversations():
+    """Load worker_id → conversation_id mapping from worker_conversations.json."""
+    path = os.path.join(os.path.dirname(__file__), "worker_conversations.json")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
 def handle_chat_reply(data):
-    """Worker replied — mark acknowledged and forward to all observers via Connecteam Chat."""
+    """
+    Worker replied in Connecteam Chat.
+    - Marks the notification as Acknowledged in the log.
+    - If per-worker group conversations are mapped, observers already see the reply
+      in the shared thread — no forwarding needed.
+    - Falls back to private forwarding to each observer when no group mapping exists.
+    """
     user_id = data.get("userId") or data.get("senderId")
     text    = data.get("text", "")
     if not user_id:
@@ -304,7 +320,12 @@ def handle_chat_reply(data):
     worker  = get_worker_name(user_id) if CT_KEY else str(user_id)
     print(f"  Chat reply from {worker}: '{text[:80]}' — acknowledged: {updated}")
 
-    # Forward to all observers via Connecteam Chat
+    # If this worker has a group conversation, observers see the reply there already
+    conv_map = load_worker_conversations()
+    if str(user_id) in conv_map:
+        return
+
+    # Fallback: forward to each observer individually via private message
     sender_id = int(os.environ.get("CONNECTEAM_SENDER_ID", "0") or "0")
     if sender_id and CT_KEY:
         fwd = f"{worker} replied:\n\n{text}"
