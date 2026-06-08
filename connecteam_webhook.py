@@ -39,7 +39,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 NOTIFICATIONS_FILE = os.environ.get("NOTIFICATIONS_FILE", "notifications_log.json")
 WEBHOOK_SECRET     = os.environ.get("WEBHOOK_SECRET", "")
 PORT               = int(os.environ.get("PORT", "8080"))
-MANAGER_NUMBER     = os.environ.get("MANAGER_NUMBER", "")
+MANAGER_NUMBER     = os.environ.get("MANAGER_NUMBER", "+61431836771")
 OBSERVER_IDS       = {2149475, 9736871, 2201497}  # Yusuf, Nada, Faduma
 
 # Time clock constants (mirrors connecteam_audit.py)

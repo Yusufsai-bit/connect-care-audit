@@ -15,7 +15,7 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 from connecteam_audit import send_worker_message, CONNECTEAM_SENDER_ID, AEST
 
 NOTIFICATIONS_FILE = os.path.join(os.path.dirname(__file__), "notifications_log.json")
-MANAGER_NUMBER     = os.environ.get("MANAGER_NUMBER", "")
+MANAGER_NUMBER     = os.environ.get("MANAGER_NUMBER", "+61431836771")
 
 
 def load_log():
