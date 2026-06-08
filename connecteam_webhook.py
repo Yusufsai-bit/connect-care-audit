@@ -39,14 +39,37 @@ NOTIFICATIONS_FILE = os.environ.get("NOTIFICATIONS_FILE", "notifications_log.jso
 WEBHOOK_SECRET     = os.environ.get("WEBHOOK_SECRET", "")
 PORT               = int(os.environ.get("PORT", "8080"))
 MANAGER_NUMBER     = os.environ.get("MANAGER_NUMBER", "")
+OBSERVER_IDS       = {2149475, 9736871, 2201497}  # Yusuf, Nada, Faduma
+
+if not WEBHOOK_SECRET:
+    print("[WARNING] WEBHOOK_SECRET is not set — any caller can POST to this endpoint. Set it in Railway env vars.")
 
 # Connecteam / Twilio credentials
 CT_KEY       = os.environ.get("CONNECTEAM_API_KEY", "")
 BASE_URL     = "https://api.connecteam.com"
 
+# GitHub API sync — allows webhook to persist acknowledgements back to the repo
+# so the dashboard and GitHub Actions always see up-to-date notification status.
+GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
+GITHUB_REPO  = os.environ.get("GITHUB_REPO", "Yusufsai-bit/connect-care-audit")
+LOG_PATH     = "notifications_log.json"
+
 # ── Notification log helpers ──────────────────────────────────────────────────
 
 def load_notifications():
+    """Load from GitHub repo if token available, else fall back to local file."""
+    if GITHUB_TOKEN:
+        try:
+            import base64
+            r = requests.get(
+                f"https://api.github.com/repos/{GITHUB_REPO}/contents/{LOG_PATH}",
+                headers={"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github.v3+json"},
+                timeout=15,
+            )
+            if r.ok:
+                return json.loads(base64.b64decode(r.json()["content"]).decode())
+        except Exception as e:
+            print(f"  [WARN] GitHub log fetch failed, using local: {e}")
     try:
         with open(NOTIFICATIONS_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
@@ -55,11 +78,32 @@ def load_notifications():
 
 
 def save_notifications(notifs):
+    """Write locally and, if GitHub token available, commit back to repo."""
     try:
         with open(NOTIFICATIONS_FILE, "w", encoding="utf-8") as f:
             json.dump(notifs, f, default=str, indent=2)
     except Exception as e:
-        print(f"  [ERROR] Could not save notifications: {e}")
+        print(f"  [ERROR] Could not save notifications locally: {e}")
+
+    if GITHUB_TOKEN:
+        try:
+            import base64
+            headers = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github.v3+json"}
+            r = requests.get(
+                f"https://api.github.com/repos/{GITHUB_REPO}/contents/{LOG_PATH}",
+                headers=headers, timeout=15,
+            )
+            sha     = r.json().get("sha", "") if r.ok else ""
+            content = base64.b64encode(json.dumps(notifs, default=str, indent=2).encode()).decode()
+            payload = {"message": "chore: update notification status [skip ci]", "content": content}
+            if sha:
+                payload["sha"] = sha
+            requests.put(
+                f"https://api.github.com/repos/{GITHUB_REPO}/contents/{LOG_PATH}",
+                headers=headers, json=payload, timeout=15,
+            )
+        except Exception as e:
+            print(f"  [WARN] GitHub log sync failed: {e}")
 
 
 def mark_acknowledged(user_id):
@@ -265,7 +309,7 @@ def handle_clock_out(data):
     """
     user_id = data.get("userId")
     job_id  = data.get("jobId")
-    if not user_id:
+    if not user_id or int(user_id) in OBSERVER_IDS:
         return
 
     worker_name = get_worker_name(user_id)
@@ -290,12 +334,16 @@ def handle_clock_out(data):
 
 def load_worker_conversations():
     """Load worker_id → conversation_id mapping from worker_conversations.json."""
-    path = os.path.join(os.path.dirname(__file__), "worker_conversations.json")
     try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
+        from connecteam_audit import load_worker_conversations as _load
+        return _load()
     except Exception:
-        return {}
+        path = os.path.join(os.path.dirname(__file__), "worker_conversations.json")
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
 
 
 def handle_chat_reply(data):
@@ -311,8 +359,6 @@ def handle_chat_reply(data):
     if not user_id:
         return
 
-    # Ignore messages from observers themselves to prevent feedback loops
-    OBSERVER_IDS = [2149475, 9736871, 2201497]  # Yusuf, Nada, Faduma
     if int(user_id) in OBSERVER_IDS:
         return
 
