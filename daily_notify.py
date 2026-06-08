@@ -5,7 +5,6 @@ Runs automatically via GitHub Actions every morning at 7 AM AEST.
 Audits yesterday's shifts, sends Connecteam Chat messages to every worker with
 CRITICAL or HIGH issues (plus MEDIUM credential expiry warnings), and:
   - Appends results to notifications_log.json
-  - Writes per-worker compliance scores to Connecteam profiles (if configured)
 
 Run manually:
     python daily_notify.py
@@ -15,7 +14,7 @@ import os, sys, json, datetime, uuid
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from connecteam_audit import (
-    run_audit, fetch_all_users, write_compliance_score,
+    run_audit, fetch_all_users,
     lock_worker_days, add_worker_note, push_daily_info_note,
     send_worker_message, send_sms,
     CONNECTEAM_SENDER_ID, TWILIO_FROM_NUMBER,
@@ -26,9 +25,6 @@ NOTIFICATIONS_FILE = os.path.join(os.path.dirname(__file__), "notifications_log.
 MANAGER_NUMBER     = os.environ.get("MANAGER_NUMBER", "")
 NOTIFY_SEVERITIES  = {"CRITICAL", "HIGH"}
 CRED_CATEGORIES    = {"EXPIRED CREDENTIAL", "CREDENTIAL EXPIRING SOON"}
-
-# Compliance score deductions per severity issue
-SCORE_DEDUCTIONS = {"CRITICAL": 15, "HIGH": 8, "MEDIUM": 3, "LOW": 1}
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -93,48 +89,6 @@ def build_credential_message(worker_name, cred_issues):
 
 def send(worker_id, text, worker_name=None):
     return send_worker_message(worker_id, text, worker_name=worker_name)
-
-
-def calc_compliance_score(issues_list):
-    """Score 0-100; deductions per severity, floored at 0."""
-    deductions = sum(SCORE_DEDUCTIONS.get(i["severity"], 0) for i in issues_list)
-    return max(0, 100 - deductions)
-
-
-def _write_scores(all_by_worker, contacts, now):
-    """Write compliance scores to Connecteam for all known workers."""
-    date_str = now.strftime("%Y-%m-%d")
-    written  = 0
-    scored   = set()
-
-    # Workers with issues → calculated score
-    for wname, issues_list in all_by_worker.items():
-        wid = (contacts.get(wname) or {}).get("userId")
-        if not wid:
-            continue
-        score = calc_compliance_score(issues_list)
-        ok, result = write_compliance_score(wid, score, date_str)
-        if ok:
-            written += 1
-        elif "not set" not in str(result).lower():
-            print(f"  [WARN] Score write failed for {wname}: {result}")
-        scored.add(wname)
-
-    # Workers with no issues → 100
-    for wname, winfo in contacts.items():
-        if wname in scored:
-            continue
-        wid = winfo.get("userId")
-        if not wid:
-            continue
-        ok, _ = write_compliance_score(wid, 100.0, date_str)
-        if ok:
-            written += 1
-
-    if written:
-        print(f"Compliance scores written to Connecteam: {written} workers.")
-    else:
-        print("Compliance scores: skipped (COMPLIANCE_INDICATOR_ID not configured).")
 
 
 # ── Post-notification helpers ─────────────────────────────────────────────────
@@ -231,37 +185,30 @@ def main():
     }
 
     if not issues:
-        print("No issues found — all workers at 100% compliance.")
-        _write_scores({}, contacts, now)
+        print("No issues found — all workers fully compliant.")
         return
 
     # ── Group issues ──────────────────────────────────────────────────────
     # notify_workers: CRITICAL/HIGH (all categories) + MEDIUM credentials
-    # all_by_worker:  every issue, used for compliance scoring
     notify_workers = {}
-    all_by_worker  = {}
 
     for iss in issues:
-        w = iss.worker
-        issue_dict = {
-            "severity": iss.severity,
-            "category": iss.category,
-            "client":   iss.client or "",
-            "date":     iss.date or "",
-            "detail":   iss.detail or "",
-        }
-        all_by_worker.setdefault(w, []).append(issue_dict)
-
         include = (
             iss.severity in NOTIFY_SEVERITIES
             or (iss.severity == "MEDIUM" and iss.category in CRED_CATEGORIES)
         )
         if include:
-            notify_workers.setdefault(w, []).append(issue_dict)
+            issue_dict = {
+                "severity": iss.severity,
+                "category": iss.category,
+                "client":   iss.client or "",
+                "date":     iss.date or "",
+                "detail":   iss.detail or "",
+            }
+            notify_workers.setdefault(iss.worker, []).append(issue_dict)
 
     if not notify_workers:
         print("No notifiable issues — nothing to send.")
-        _write_scores(all_by_worker, contacts, now)
         return
 
     print(f"Workers to notify: {len(notify_workers)}")
@@ -357,9 +304,6 @@ def main():
         )
         send_sms(MANAGER_NUMBER, summary)
         print(f"Manager summary sent to {MANAGER_NUMBER}")
-
-    # ── Write compliance scores to Connecteam ─────────────────────────────
-    _write_scores(all_by_worker, contacts, now)
 
     # ── Lock time entries for days > 2 days ago ───────────────────────────
     _lock_prior_days(contacts, now)
