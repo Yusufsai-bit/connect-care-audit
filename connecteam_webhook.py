@@ -30,6 +30,7 @@ import sys
 import json
 import hmac
 import hashlib
+import math
 import datetime
 import requests
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -40,6 +41,17 @@ WEBHOOK_SECRET     = os.environ.get("WEBHOOK_SECRET", "")
 PORT               = int(os.environ.get("PORT", "8080"))
 MANAGER_NUMBER     = os.environ.get("MANAGER_NUMBER", "")
 OBSERVER_IDS       = {2149475, 9736871, 2201497}  # Yusuf, Nada, Faduma
+
+# Time clock constants (mirrors connecteam_audit.py)
+TIME_CLOCK_ID    = 1776332
+NOTES_FIELD      = "65cbb88e-6c3a-41b1-8822-975caed50def"
+GPS_THRESHOLD_KM = 0.5   # allowed radius from client address
+SHORT_SHIFT_MIN  = 15    # shifts under this are suspicious
+
+# GPS fallbacks for jobs with no coordinates in Connecteam
+CLIENT_GPS_OVERRIDES = {
+    "john": (-37.67282, 144.99437, 0.2),
+}
 
 if not WEBHOOK_SECRET:
     print("[WARNING] WEBHOOK_SECRET is not set — any caller can POST to this endpoint. Set it in Railway env vars.")
@@ -151,6 +163,61 @@ def get_job_name(job_id):
     data = ct_get(f"/jobs/v1/jobs/{job_id}")
     j    = (data.get("data") or {}).get("job") or data
     return j.get("title") or j.get("name") or f"Client {job_id}"
+
+
+def get_job_full(job_id):
+    """Return full job record including GPS coordinates."""
+    data = ct_get(f"/jobs/v1/jobs/{job_id}")
+    return (data.get("data") or {}).get("job") or data
+
+
+def haversine_km(lat1, lon1, lat2, lon2):
+    R = 6371.0
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = (math.sin(dlat / 2) ** 2
+         + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2))
+         * math.sin(dlon / 2) ** 2)
+    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+
+def get_note_text(attachments):
+    """Extract shift note text from shiftAttachments list."""
+    for att in (attachments or []):
+        if att.get("shiftAttachmentId") != NOTES_FIELD:
+            continue
+        for key in ("value", "text", "note", "content"):
+            val = att.get(key)
+            if val and isinstance(val, str) and val.strip():
+                return val.strip()
+        fields = att.get("fields") or att.get("values") or []
+        if isinstance(fields, list):
+            for f in fields:
+                val = f.get("value") or f.get("text") or ""
+                if val and isinstance(val, str) and val.strip():
+                    return val.strip()
+    return ""
+
+
+def fetch_latest_activity(user_id):
+    """
+    Fetch today's time activities and return the most recently clocked-out
+    entry for this user. Returns None if not found.
+    """
+    today = datetime.date.today().isoformat()
+    data  = ct_get(
+        f"/time-clock/v1/time-clocks/{TIME_CLOCK_ID}/time-activities",
+        {"startDate": today, "endDate": today},
+    )
+    raw = (data.get("data") or {}).get("timeActivitiesByUsers") or []
+    for entry in raw:
+        if str(entry.get("userId")) == str(user_id):
+            shifts = entry.get("shifts") or []
+            # Most recent completed shift (has an end timestamp)
+            completed = [s for s in shifts if (s.get("end") or {}).get("timestamp")]
+            if completed:
+                return max(completed, key=lambda s: s["end"]["timestamp"])
+    return None
 
 
 # ── Messaging ─────────────────────────────────────────────────────────────────
@@ -304,8 +371,12 @@ def handle_user_change(event_type, data):
 
 def handle_clock_out(data):
     """
-    Fires when a worker clocks out. Sends an immediate reminder to submit notes.
-    This catches the issue in real-time — worker still has shift context.
+    Fires when a worker clocks out. Performs real-time checks:
+      - Notes submitted?
+      - GPS at clock-in within allowed radius of client address?
+      - Shift suspiciously short?
+    Only messages the worker if something is actually wrong.
+    GPS mismatches also alert the manager immediately.
     """
     user_id = data.get("userId")
     job_id  = data.get("jobId")
@@ -314,22 +385,95 @@ def handle_clock_out(data):
 
     worker_name = get_worker_name(user_id)
     client_name = get_job_name(job_id) if job_id else "your client"
-    first       = worker_name.split()[0] if worker_name else "Hi"
+    first       = worker_name.split()[0] if worker_name else "there"
 
-    msg = (
-        f"Hi {first}, just clocked you out from {client_name}. "
-        f"Please make sure your shift notes are submitted — "
-        f"they're due within 24 hours. Reply if you need anything."
-    )
+    activity = fetch_latest_activity(user_id)
 
-    # Try Connecteam Chat first, fall back to phone
+    worker_flags = []   # messages sent to the worker
+    manager_flags = []  # alerts sent to manager only
+
+    if activity:
+        clock_in  = (activity.get("start") or {}).get("timestamp", 0)
+        clock_out = (activity.get("end")   or {}).get("timestamp", 0)
+
+        # --- Duration check ---
+        if clock_in and clock_out:
+            duration_min = (clock_out - clock_in) / 60
+            if duration_min < SHORT_SHIFT_MIN:
+                worker_flags.append(
+                    f"your shift was only {round(duration_min)} min "
+                    f"— please check your times are correct"
+                )
+                manager_flags.append(
+                    f"SHORT SHIFT: {worker_name} clocked {round(duration_min)} min "
+                    f"at {client_name} — possible clock error."
+                )
+
+        # --- GPS check ---
+        if job_id:
+            job     = get_job_full(job_id)
+            job_gps = job.get("gps") or {}
+            job_lat = job_gps.get("latitude", 0)
+            job_lon = job_gps.get("longitude", 0)
+            if job_lat == 0 or job_lon == 0:
+                title_lc = (job.get("title") or "").lower()
+                for kw, (ov_lat, ov_lon, _r) in CLIENT_GPS_OVERRIDES.items():
+                    if kw in title_lc:
+                        job_lat, job_lon = ov_lat, ov_lon
+                        break
+            if job_lat != 0 and job_lon != 0:
+                loc   = (activity.get("start") or {}).get("locationData") or {}
+                c_lat = loc.get("latitude", 0)
+                c_lon = loc.get("longitude", 0)
+                if c_lat != 0 and c_lon != 0:
+                    dist = haversine_km(job_lat, job_lon, c_lat, c_lon)
+                    if dist > GPS_THRESHOLD_KM:
+                        worker_flags.append(
+                            f"your GPS at clock-in was {dist:.1f}km from "
+                            f"{client_name}'s address — please confirm you were at the right location"
+                        )
+                        manager_flags.append(
+                            f"GPS MISMATCH: {worker_name} clocked in "
+                            f"{dist:.1f}km from {client_name} "
+                            f"(address: {loc.get('address', 'unknown')})."
+                        )
+
+        # --- Notes check ---
+        attachments  = activity.get("shiftAttachments") or []
+        note_text    = get_note_text(attachments)
+        notes_missing = not note_text or len(note_text.split()) < 10
+    else:
+        notes_missing = True  # couldn't fetch activity — assume notes pending
+
+    if notes_missing:
+        worker_flags.append(
+            "your shift notes haven't been submitted yet — "
+            "please complete them within 24 hours"
+        )
+
+    if not worker_flags:
+        print(f"  Clock-out check passed for {worker_name} ({client_name}) — all good")
+        return
+
+    # Build worker message
+    lines = [f"Hi {first}, you've just clocked out from {client_name}."]
+    for flag in worker_flags:
+        lines.append(f"- Please note: {flag}.")
+    lines.append("Reply if you need anything.")
+    msg = "\n\n".join(lines)
+
     sent = send_connecteam_chat(user_id, msg)
     if not sent:
         phone = get_worker_phone(user_id)
         if phone:
             send_msg(phone, msg)
 
-    print(f"  Clock-out reminder sent to {worker_name} ({client_name})")
+    # Manager alerts for serious flags
+    for alert in manager_flags:
+        if MANAGER_NUMBER and CT_KEY:
+            send_msg(MANAGER_NUMBER, f"COMPLIANCE ALERT\n{alert}")
+
+    print(f"  Clock-out check: {worker_name} ({client_name}) — flags: {worker_flags}")
 
 
 def load_worker_conversations():
