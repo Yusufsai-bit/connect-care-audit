@@ -12,10 +12,11 @@ Environment variables required:
     ANTHROPIC_API_KEY    -- Anthropic API key (for note quality assessment)
 """
 
-import os, sys, json, re, math
+import os, sys, json, re, math, time
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 import requests
 from datetime import datetime, timezone, timedelta
+from zoneinfo import ZoneInfo
 from collections import defaultdict
 from difflib import SequenceMatcher
 
@@ -25,7 +26,9 @@ WORKER_CONVERSATIONS_FILE = os.path.join(os.path.dirname(__file__), "worker_conv
 # CONFIG
 # ---------------------------------------------
 
-CONNECTEAM_API_KEY = os.environ.get("CONNECTEAM_API_KEY", "eef0a292-593e-4da8-aed1-204f3c7a8786")
+CONNECTEAM_API_KEY = os.environ.get("CONNECTEAM_API_KEY", "")
+if not CONNECTEAM_API_KEY:
+    sys.exit("ERROR: CONNECTEAM_API_KEY environment variable is not set.")
 ANTHROPIC_API_KEY  = os.environ.get("ANTHROPIC_API_KEY", "")
 TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID", "")
 TWILIO_AUTH_TOKEN  = os.environ.get("TWILIO_AUTH_TOKEN", "")
@@ -37,7 +40,7 @@ COMPLIANCE_INDICATOR_ID   = int(os.environ.get("COMPLIANCE_INDICATOR_ID", "0") o
 BASE_URL       = "https://api.connecteam.com"
 TIME_CLOCK_ID  = 1776332
 SCHEDULER_ID   = 1775479
-AEST           = timezone(timedelta(hours=10))
+AEST           = ZoneInfo("Australia/Melbourne")
 
 # Audit thresholds
 LATE_MIN              = 30     # minutes grace before flagging late
@@ -106,7 +109,7 @@ CLIENT_TITLES = {
 
 # Safeguarding keyword groups
 INCIDENT_KEYWORDS    = ["fall", "fell", "fallen", "injur", "hurt", "bruise", "bleed",
-                         "ambulance", "hospital", "police", "scratch", "bitten", "hit ",
+                         "ambulance", "hospital", "police", "scratch", "bitten", r"\bhit\b",
                          "struck", "assault", "aggress", "emergency", "unconscious", "seizure"]
 RESTRICTIVE_KEYWORDS = ["restrain", "physical intervention", "seclu", "locked in",
                          "blocked exit", "held down", "physically held"]
@@ -135,12 +138,18 @@ class Issue:
 # ---------------------------------------------
 
 def ct_get(path, params=None):
-    r = requests.get(
-        f"{BASE_URL}{path}",
-        headers={"X-API-KEY": CONNECTEAM_API_KEY, "Accept": "application/json"},
-        params=params,
-        timeout=30,
-    )
+    for attempt in range(3):
+        r = requests.get(
+            f"{BASE_URL}{path}",
+            headers={"X-API-KEY": CONNECTEAM_API_KEY, "Accept": "application/json"},
+            params=params,
+            timeout=30,
+        )
+        if r.status_code == 429:
+            time.sleep(2 ** attempt)
+            continue
+        r.raise_for_status()
+        return r.json()
     r.raise_for_status()
     return r.json()
 
@@ -166,9 +175,10 @@ def fetch_all_jobs():
         batch = data["data"]["jobs"]
         for j in batch:
             jobs[j["jobId"]] = j
-        if len(batch) < 10:
-            break
+        total = data.get("paging", {}).get("total", 0)
         offset += len(batch)
+        if offset >= total or not batch:
+            break
     return jobs
 
 
@@ -189,7 +199,7 @@ def fetch_time_activities(start_date, end_date):
 
 def fetch_form_submissions(form_id):
     try:
-        data = ct_get(f"/forms/v1/forms/{form_id}/form-submissions")
+        data = ct_get(f"/forms/v1/forms/{form_id}/form-submissions", {"limit": 100})
         return data["data"]["formSubmissions"]
     except Exception:
         return []
@@ -322,27 +332,32 @@ def fetch_task_boards():
 
 def ct_post(path, body):
     """POST helper — returns (True, response_json) or (False, error_string)."""
-    try:
-        r = requests.post(
-            f"{BASE_URL}{path}",
-            headers={
-                "X-API-KEY":    CONNECTEAM_API_KEY,
-                "Accept":       "application/json",
-                "Content-Type": "application/json",
-            },
-            json=body,
-            timeout=30,
-        )
-        r.raise_for_status()
-        return True, r.json()
-    except requests.exceptions.HTTPError as e:
+    for attempt in range(3):
         try:
-            detail = e.response.json()
-        except Exception:
-            detail = e.response.text
-        return False, f"HTTP {e.response.status_code}: {detail}"
-    except Exception as e:
-        return False, str(e)
+            r = requests.post(
+                f"{BASE_URL}{path}",
+                headers={
+                    "X-API-KEY":    CONNECTEAM_API_KEY,
+                    "Accept":       "application/json",
+                    "Content-Type": "application/json",
+                },
+                json=body,
+                timeout=30,
+            )
+            if r.status_code == 429:
+                time.sleep(2 ** attempt)
+                continue
+            r.raise_for_status()
+            return True, r.json()
+        except requests.exceptions.HTTPError as e:
+            try:
+                detail = e.response.json()
+            except Exception:
+                detail = e.response.text
+            return False, f"HTTP {e.response.status_code}: {detail}"
+        except Exception as e:
+            return False, str(e)
+    return False, "Rate limited after 3 retries"
 
 
 def ct_put(path, body):
@@ -954,7 +969,7 @@ Return ONLY a valid JSON array. No explanation, no markdown."""
 
     try:
         response = client.messages.create(
-            model="claude-haiku-4-5-20251001",
+            model="claude-haiku-4-5",
             max_tokens=4096,
             messages=[{"role": "user", "content": prompt}],
         )
@@ -1691,8 +1706,7 @@ def run_audit(days_back=7):
 
     unique_workers_with_clocks = {uid for uid, _ in worker_job_pairs}
     assignments_cache = {}
-    # Cap at 30 workers to avoid excessive API calls
-    for uid in list(unique_workers_with_clocks)[:30]:
+    for uid in unique_workers_with_clocks:
         try:
             data = ct_get(f"/users/v1/users/{uid}/assignments")
             raw  = data.get("data") or {}
