@@ -628,26 +628,28 @@ def save_worker_conversations(mapping):
 def detect_worker_conversations():
     """
     Scan all Connecteam group (team) conversations and match their titles to
-    worker names via fuzzy string matching. The Connecteam API does not return
-    member lists, so we rely on the convention that each compliance group is
-    named after the worker (e.g. "Abdul Latif" or "Abdul latif").
-
+    worker names. The API doesn't return member lists, so we match by title.
+    Handles both full names ("Abdul Latif") and first-name-only titles ("Peter").
     Saves and returns {str(worker_user_id): conversation_id}.
     """
     convs   = fetch_conversations()
     users   = fetch_all_users()
     obs_set = {str(oid) for oid in COMPLIANCE_OBSERVER_IDS}
 
-    # Build name → user_id map, excluding management observers
-    name_to_id = {}
+    # Build lookup structures, excluding management observers
+    workers_data = {}  # uid -> {full, first}
     for uid, u in users.items():
         if str(uid) in obs_set:
             continue
-        full = f"{u.get('firstName', '')} {u.get('lastName', '')}".strip().lower()
+        first = (u.get("firstName") or "").strip().lower()
+        last  = (u.get("lastName") or "").strip().lower()
+        full  = f"{first} {last}".strip()
         if full:
-            name_to_id[full] = str(uid)
+            workers_data[str(uid)] = {"full": full, "first": first}
 
     mapping = {}
+    already_claimed = set()  # prevent two convs claiming same worker
+
     for conv in convs:
         c       = conv.get("data") or conv
         conv_id = c.get("conversationId") or c.get("id")
@@ -656,19 +658,41 @@ def detect_worker_conversations():
         if not conv_id or not title or ctype not in ("team", "group"):
             continue
 
-        # Exact match first
-        if title in name_to_id:
-            mapping[name_to_id[title]] = conv_id
-            continue
-
-        # Fuzzy match — find the closest worker name above threshold
         best_score, best_uid = 0.0, None
-        for wname, wid in name_to_id.items():
-            score = SequenceMatcher(None, title, wname).ratio()
+
+        for uid, wd in workers_data.items():
+            if uid in already_claimed:
+                continue
+            full  = wd["full"]
+            first = wd["first"]
+
+            # 1. Exact full-name match
+            if title == full:
+                best_score, best_uid = 1.0, uid
+                break
+
+            # 2. Exact first-name match
+            if title == first:
+                score = 0.95
+                if score > best_score:
+                    best_score, best_uid = score, uid
+                continue
+
+            # 3. Title is a prefix of the worker's first name (e.g. "Irfan" -> "Irfanullah")
+            if first.startswith(title) and len(title) >= 4:
+                score = 0.90
+                if score > best_score:
+                    best_score, best_uid = score, uid
+                continue
+
+            # 4. Fuzzy full-name match
+            score = SequenceMatcher(None, title, full).ratio()
             if score > best_score:
-                best_score, best_uid = score, wid
+                best_score, best_uid = score, uid
+
         if best_score >= 0.72 and best_uid:
             mapping[best_uid] = conv_id
+            already_claimed.add(best_uid)
 
     save_worker_conversations(mapping)
     return mapping
