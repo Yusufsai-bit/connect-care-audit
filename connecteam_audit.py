@@ -627,33 +627,48 @@ def save_worker_conversations(mapping):
 
 def detect_worker_conversations():
     """
-    Scan all Connecteam group conversations to find per-worker compliance groups.
-    A compliance group is identified by having at least one COMPLIANCE_OBSERVER_ID
-    member and exactly one non-observer participant (the worker).
+    Scan all Connecteam group (team) conversations and match their titles to
+    worker names via fuzzy string matching. The Connecteam API does not return
+    member lists, so we rely on the convention that each compliance group is
+    named after the worker (e.g. "Abdul Latif" or "Abdul latif").
+
     Saves and returns {str(worker_user_id): conversation_id}.
     """
     convs   = fetch_conversations()
+    users   = fetch_all_users()
     obs_set = {str(oid) for oid in COMPLIANCE_OBSERVER_IDS}
-    mapping = {}
 
+    # Build name → user_id map, excluding management observers
+    name_to_id = {}
+    for uid, u in users.items():
+        if str(uid) in obs_set:
+            continue
+        full = f"{u.get('firstName', '')} {u.get('lastName', '')}".strip().lower()
+        if full:
+            name_to_id[full] = str(uid)
+
+    mapping = {}
     for conv in convs:
-        # Normalise — API may nest data differently across versions
         c       = conv.get("data") or conv
         conv_id = c.get("conversationId") or c.get("id")
-        members = c.get("members") or c.get("participants") or []
-        if not conv_id or len(members) < 2:
+        title   = (c.get("title") or c.get("name") or "").strip().lower()
+        ctype   = c.get("type", "")
+        if not conv_id or not title or ctype not in ("team", "group"):
             continue
 
-        member_ids = {str(m.get("userId") or m.get("id") or "") for m in members}
-        member_ids.discard("")
+        # Exact match first
+        if title in name_to_id:
+            mapping[name_to_id[title]] = conv_id
+            continue
 
-        workers = member_ids - obs_set
-        has_obs = bool(member_ids & obs_set)
-
-        # Group must have at least one observer and exactly one worker
-        if has_obs and len(workers) == 1:
-            worker_id = workers.pop()
-            mapping[worker_id] = conv_id
+        # Fuzzy match — find the closest worker name above threshold
+        best_score, best_uid = 0.0, None
+        for wname, wid in name_to_id.items():
+            score = SequenceMatcher(None, title, wname).ratio()
+            if score > best_score:
+                best_score, best_uid = score, wid
+        if best_score >= 0.72 and best_uid:
+            mapping[best_uid] = conv_id
 
     save_worker_conversations(mapping)
     return mapping
