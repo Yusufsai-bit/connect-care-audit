@@ -505,74 +505,154 @@ def get_worker_issues(user_id):
     return []
 
 
-def classify_and_reply(worker_name, worker_reply, issues):
+def verify_worker_claims(user_id, text):
     """
-    Use Claude to classify the reply as simple or complex, and generate a response.
-    Returns (is_complex: bool, reply_text: str).
-    Falls back to simple template if no API key.
+    If the worker claims to have done something (submitted notes, clocked out, etc.),
+    check Connecteam to see if it's actually done.
+    Returns a plain-English verification string, or "" if nothing to verify.
     """
+    text_lower = text.lower()
+    claim_keywords = ["submitted", "done", "updated", "fixed", "added", "sent", "completed",
+                      "uploaded", "filled", "put in", "just did", "sorted", "logged"]
+    if not any(w in text_lower for w in claim_keywords):
+        return ""
+
+    results = []
+
+    # Check notes
+    if any(w in text_lower for w in ["note", "notes", "shift note", "progress note"]):
+        try:
+            today     = datetime.date.today().isoformat()
+            yesterday = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
+            data      = ct_get(f"/time-clock/v1/time-clocks/{TIME_CLOCK_ID}/time-activities",
+                               {"startDate": yesterday, "endDate": today})
+            by_user   = (data.get("data") or {}).get("timeActivitiesByUsers") or []
+            found_note = False
+            for entry in by_user:
+                if str(entry.get("userId")) == str(user_id):
+                    for shift in (entry.get("shifts") or []):
+                        atts = shift.get("shiftAttachments") or []
+                        note = get_note_text(atts)
+                        if note and len(note.split()) >= 10:
+                            found_note = True
+                            break
+            results.append("shift notes: VERIFIED ✓" if found_note else "shift notes: NOT FOUND — can't see them yet")
+        except Exception:
+            pass
+
+    return ", ".join(results)
+
+
+def _call_claude(prompt, max_tokens=300):
+    """Call Claude Haiku and return the text response. Returns None on failure."""
     if not ANTHROPIC_API_KEY:
-        return False, f"Thanks {worker_name.split()[0]}, noted — I'll pass this on if anything needs following up."
-
-    issues_summary = "\n".join(
-        f"- [{i.get('Severity','?')}] {i.get('Issue','?')}: {i.get('Detail','')[:100]}"
-        for i in (issues or [])[:5]
-    ) or "No specific issues on record."
-
-    prompt = f"""You are Amy, a compliance coordinator at Connect Care disability services.
-A support worker has replied to a compliance message you sent them this morning.
-
-Original issues flagged:
-{issues_summary}
-
-Worker's reply:
-"{worker_reply}"
-
-Decide:
-1. Is this reply SIMPLE (they've acknowledged, fixed the issue, or given a clear explanation that doesn't need manager input)?
-2. Is this reply COMPLEX (they're asking a question, disputing something, explaining an incident, or needs a manager decision)?
-
-If SIMPLE: write a short, warm, professional reply from Amy (2-3 sentences max). Thank them, confirm you've noted it, close it out.
-If COMPLEX: write a short holding reply from Amy (1-2 sentences) that buys time — e.g. "Thanks [first name], I'll look into this and come back to you shortly."
-
-Respond in this exact JSON format:
-{{"is_complex": true/false, "reply": "your reply text here"}}
-
-Rules:
-- Always use their first name
-- Keep it natural and human, not robotic
-- Never mention AI or automation
-- Do not exceed 3 sentences
-- Return ONLY the JSON, no explanation"""
-
+        return None
     try:
         import anthropic
-        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        client   = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
         response = client.messages.create(
             model="claude-haiku-4-5",
-            max_tokens=256,
+            max_tokens=max_tokens,
             messages=[{"role": "user", "content": prompt}],
         )
         raw = response.content[0].text.strip()
         if raw.startswith("```"):
             raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+        return raw
+    except Exception as e:
+        print(f"  [WARN] Claude call failed: {e}")
+        return None
+
+
+def generate_amy_reply(worker_name, text, issues, verification=""):
+    """
+    Classify the worker's message and generate Amy's reply.
+    Returns (is_complex: bool, reply_text: str).
+    """
+    first = worker_name.split()[0]
+
+    if not ANTHROPIC_API_KEY:
+        return False, f"Thanks {first}, noted — I'll be in touch if anything else is needed."
+
+    issues_summary = "\n".join(
+        f"- [{i.get('Severity','?')}] {i.get('Issue','?')}: {i.get('Detail','')[:100]}"
+        for i in (issues or [])[:5]
+    ) or "No open compliance issues."
+
+    verification_line = f"\nVerification check: {verification}" if verification else ""
+
+    prompt = f"""You are Amy, compliance coordinator at Connect Care disability services.
+A support worker just sent you a message. Respond as Amy.
+
+Worker's name: {worker_name}
+Their open compliance issues:
+{issues_summary}{verification_line}
+
+Their message:
+"{text}"
+
+Decide:
+- SIMPLE: they've acknowledged, explained, or fixed something — you can close it yourself
+- COMPLEX: they're asking a question, disputing something, describing an incident, or it needs a manager decision
+
+If SIMPLE: reply warmly in 2-3 sentences. If verification showed their claim checks out, confirm it. If verification showed it's NOT done yet, let them know kindly and ask them to check again.
+If COMPLEX: 1-2 sentences buying time — "Thanks [first name], I'll look into this and come back to you shortly."
+
+JSON only:
+{{"is_complex": true/false, "reply": "..."}}
+
+Rules: use first name, natural tone, never mention AI, max 3 sentences."""
+
+    raw = _call_claude(prompt)
+    if not raw:
+        return False, f"Thanks {first}, noted — I'll follow up if anything else is needed."
+    try:
         result = json.loads(raw)
         return result.get("is_complex", False), result.get("reply", "")
-    except Exception as e:
-        print(f"  [WARN] AI classify failed: {e}")
-        first = worker_name.split()[0]
-        return False, f"Thanks {first}, noted — I'll follow up if anything else is needed."
+    except Exception:
+        return False, f"Thanks {first}, noted."
+
+
+def compose_from_guidance(worker_name, manager_guidance, original_reply, issues):
+    """
+    Manager gave direction in CC Management (e.g. 'tell them to resubmit the form').
+    Amy composes a proper message to send the worker.
+    """
+    first = worker_name.split()[0]
+
+    if not ANTHROPIC_API_KEY:
+        return manager_guidance  # Fall back to sending guidance verbatim
+
+    issues_summary = "\n".join(
+        f"- [{i.get('Severity','?')}] {i.get('Issue','?')}: {i.get('Detail','')[:100]}"
+        for i in (issues or [])[:3]
+    ) or "General compliance matter."
+
+    prompt = f"""You are Amy, compliance coordinator at Connect Care disability services.
+A manager has told you what to say to a support worker. Write Amy's message to the worker.
+
+Worker: {worker_name}
+Worker said: "{original_reply}"
+Open issues: {issues_summary}
+Manager's guidance: "{manager_guidance}"
+
+Write a short, natural, professional message from Amy to {first} based on the manager's guidance.
+2-4 sentences. Use their first name. Never mention the manager, AI, or that you were told what to say.
+Reply with just the message text, no JSON."""
+
+    result = _call_claude(prompt)
+    return result if result else manager_guidance
 
 
 def handle_chat_reply(data):
     """
-    Worker replied in Connecteam Chat.
+    Any worker message → Amy reads it, verifies any claims, and replies.
     Flow:
-      1. Message from CC Management chat by a manager → relay to the next pending worker as Amy.
-      2. Message from a worker:
-         - Simple  → Amy sends an AI-generated acknowledgement.
-         - Complex → Amy sends a holding reply to the worker, posts context to CC Management.
-                     When any manager replies there, Amy forwards their words to the worker.
+      1. Manager replied in CC Management with guidance → Amy composes a proper message
+         from that guidance and sends it to the pending worker.
+      2. Worker sent any message → verify claims, classify, reply:
+         - Simple/verified → Amy closes it out.
+         - Complex → Amy holds, asks CC Management "what should I tell [worker]?"
     """
     user_id = data.get("userId") or data.get("senderId")
     text    = (data.get("text") or "").strip()
@@ -582,58 +662,63 @@ def handle_chat_reply(data):
 
     uid = int(user_id)
 
-    # ── Manager replied in CC Management → relay to pending worker ────────────
+    # ── Manager guidance in CC Management → compose and send to worker ────────
     if conv_id == CC_MGMT_CONV_ID and uid in OBSERVER_IDS:
         if PENDING_RELAY_QUEUE:
-            relay = PENDING_RELAY_QUEUE.pop(0)
-            wid   = relay["worker_id"]
-            wname = relay["worker_name"]
-            send_connecteam_chat(wid, text)
-            print(f"  Relayed CC Management response to {wname}: '{text[:80]}'")
-            # If more pending, post next one to CC Management now
+            relay    = PENDING_RELAY_QUEUE.pop(0)
+            wid      = relay["worker_id"]
+            wname    = relay["worker_name"]
+            composed = compose_from_guidance(wname, text, relay["reply"], relay.get("issues", []))
+            send_connecteam_chat(wid, composed)
+            print(f"  Amy sent composed response to {wname} based on manager guidance")
             if PENDING_RELAY_QUEUE:
                 _post_to_cc_mgmt(PENDING_RELAY_QUEUE[0])
         return
 
-    # ── Ignore other observer messages ─────────────────────────────────────────
+    # ── Ignore other observer messages ────────────────────────────────────────
     if uid in OBSERVER_IDS:
         return
 
     worker = get_worker_name(user_id) if CT_KEY else str(user_id)
     mark_acknowledged(user_id)
-    print(f"  Chat reply from {worker}: '{text[:80]}'")
+    print(f"  Message from {worker}: '{text[:80]}'")
 
-    # ── Classify and respond ───────────────────────────────────────────────────
+    # ── Verify any claims the worker is making ─────────────────────────────────
+    verification = verify_worker_claims(user_id, text)
+    if verification:
+        print(f"  Verification: {verification}")
+
+    # ── Generate Amy's reply ───────────────────────────────────────────────────
     issues              = get_worker_issues(user_id)
-    is_complex, amy_reply = classify_and_reply(worker, text, issues)
+    is_complex, amy_reply = generate_amy_reply(worker, text, issues, verification)
 
     if amy_reply and SENDER_ID and CT_KEY:
         send_connecteam_chat(user_id, amy_reply)
         print(f"  Amy replied ({'holding' if is_complex else 'resolved'}): '{amy_reply[:80]}'")
 
-    # ── Escalate complex replies to CC Management ──────────────────────────────
+    # ── Complex → ask CC Management what to say ───────────────────────────────
     if is_complex:
         relay = {"worker_id": user_id, "worker_name": worker, "reply": text, "issues": issues}
         PENDING_RELAY_QUEUE.append(relay)
-        if len(PENDING_RELAY_QUEUE) == 1:  # Post immediately if no other pending
+        if len(PENDING_RELAY_QUEUE) == 1:
             _post_to_cc_mgmt(relay)
-        print(f"  Escalated {worker}'s reply to CC Management — relay queued ({len(PENDING_RELAY_QUEUE)} pending)")
+        print(f"  Asked CC Management for guidance on {worker} ({len(PENDING_RELAY_QUEUE)} pending)")
 
 
 def _post_to_cc_mgmt(relay):
-    """Post a worker's complex reply to CC Management so a manager can respond."""
+    """Ask CC Management what Amy should say to a worker."""
     worker = relay["worker_name"]
     first  = worker.split()[0]
     issues_summary = "\n".join(
         f"• [{i.get('Severity','?')}] {i.get('Issue','?')} — {i.get('Detail','')[:80]}"
         for i in (relay.get("issues") or [])[:4]
-    ) or "(no issues on record)"
+    ) or "(no open issues)"
 
     msg = (
-        f"{first} replied to Amy's compliance message:\n\n"
+        f"{first} sent Amy a message that needs a management response:\n\n"
         f"\"{relay['reply']}\"\n\n"
-        f"Original issues flagged:\n{issues_summary}\n\n"
-        f"Reply here and Amy will send your response directly to {first}."
+        f"Their open issues:\n{issues_summary}\n\n"
+        f"What should Amy say back to {first}? Reply here with your guidance and Amy will compose and send the message."
     )
     post_to_conversation(CC_MGMT_CONV_ID, msg)
 
