@@ -12,7 +12,7 @@ Environment variables required:
     ANTHROPIC_API_KEY    -- Anthropic API key (for note quality assessment)
 """
 
-import os, sys, json, re, math, time
+import os, sys, json, re, math, time, random
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 import requests
 from datetime import datetime, timezone, timedelta
@@ -991,6 +991,9 @@ Return ONLY a valid JSON array. No explanation, no markdown."""
 
 def run_audit(days_back=7):
     now       = datetime.now(AEST)
+    # Randomise the grace period (20–50 min) so notifications don't fire at a
+    # predictable interval — prevents it feeling like an automated system.
+    _clockout_grace_secs = random.randint(20, 50) * 60
     start_dt  = now - timedelta(days=days_back)
     start_date = start_dt.strftime("%Y-%m-%d")
     end_date   = now.strftime("%Y-%m-%d")
@@ -1149,8 +1152,7 @@ def run_audit(days_back=7):
                     f"{late_min} min late -- scheduled {s_str}, arrived {ts_aest(clock_in).strftime('%H:%M')}."))
 
             if not clock_out:
-                # Only flag once 30 minutes past the scheduled end time
-                if now.timestamp() > sched_end + 1800:
+                if now.timestamp() > sched_end + _clockout_grace_secs:
                     overdue_min = round((now.timestamp() - sched_end) / 60)
                     issues.append(Issue("HIGH", "MISSING CLOCK-OUT", name, client, dlabel,
                         f"Scheduled until {e_str} — still clocked in, {overdue_min} min past end time."))
