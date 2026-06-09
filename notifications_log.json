@@ -1,0 +1,403 @@
+[
+  {
+    "id": "e1b533f9",
+    "worker": "Abdul Latif",
+    "worker_id": 7931909,
+    "sent_at": "09 Jun 2026, 10:32 PM",
+    "sent_at_iso": "2026-06-09T22:32:30.100016+10:00",
+    "period": "yesterday (Mon 08 Jun)",
+    "severity_counts": {
+      "HIGH": 2
+    },
+    "issue_count": 2,
+    "issues": [
+      {
+        "Severity": "HIGH",
+        "Issue": "NO SHIFT NOTES",
+        "Client": "Evan Gatt",
+        "Date": "Mon 08-Jun",
+        "Detail": "No shift note fields submitted at all."
+      },
+      {
+        "Severity": "HIGH",
+        "Issue": "POSSIBLE LATE INCIDENT REPORTING",
+        "Client": "Medication Incident Form",
+        "Date": "Tue 09-Jun",
+        "Detail": "Entry #17 -- 30h between incident and report. If this was a serious incident, the 24h NDIS Commission notification window may have passed."
+      }
+    ],
+    "message_sent": "Hi Abdul,\n\nFrom your shift yesterday (Mon 08 Jun) \u2014 I need you to sort these out by 5 PM today:\n\n\ud83d\udfe0 Evan Gatt \u2014 No shift note fields submitted at all.\n\ud83d\udfe0 Medication Incident Form \u2014 Entry #17 -- 30h between incident and report. If this was a serious incident, the 24h N\u2026\n\nReply and let me know what happened and what you've done to fix it \u2014 need to hear back by 5 PM.\n\nCheers",
+    "channel": "connecteam",
+    "status": "Sent",
+    "acknowledged_at": null,
+    "resolved_at": null,
+    "manager_notes": "",
+    "automated": true,
+    "dry_run": false
+  },
+  {
+    "id": "e5b043d6",
+    "worker": "Hajar El Hassan",
+    "worker_id": 9736867,
+    "sent_at": "09 Jun 2026, 10:32 PM",
+    "sent_at_iso": "2026-06-09T22:32:30.100016+10:00",
+    "period": "yesterday (Mon 08 Jun)",
+    "severity_counts": {
+      "HIGH": 2
+    },
+    "issue_count": 2,
+    "issues": [
+      {
+        "Severity": "HIGH",
+        "Issue": "FAILS NDIS STANDARD",
+        "Client": "Nicole Loveless",
+        "Date": "Tue 09-Jun",
+        "Detail": "Note does not meet NDIS progress note requirements. Issues: Note is truncated/incomplete - ends mid-sentence: 'she appeared happy, relaxed, and excited. After returning home, Nicole wanted support with cleaning and tidying the house. We worked together to complete the household tasks while she listened to her favourite music on the TV, which helped create a positive and enjoyable atmosphere. Nicole then decided she needed to withdraw some money, so we went to Broadmeadows Shopping Centre. After completing this task, we returned home and began preparing dinner together. Nicole wanted to cook meatballs and actively participated in the meal preparation. During cooking, she realised she had forgotten to buy parsley and a coat hanger, so we made another quick trip to the shops to purchase the items she needed. Once back home, Nicole happily continued cooking and completed the meal. She was in a great mood, engaged well in all activities, and showed good motivation throughout the day. After dinner preparation, we went for a pleasant walk together, which Nicole enjoyed. We then returned home and worked together to wash and put away the dishes. Overall, Nicole had a very positive and productive day. She actively participated in community acces' - final word cut off; Excessive detail and repetitive structure suggests AI-generation or templating; Overly positive tone throughout without any neutral observations or areas for development; Shift duration 7.1 hours with extensive activities listed - no clear time breakdown makes verification difficult; Cannot properly assess completion of note due to truncation"
+      },
+      {
+        "Severity": "HIGH",
+        "Issue": "NOTE DOESN'T MAKE SENSE",
+        "Client": "Nicole Loveless",
+        "Date": "Tue 09-Jun",
+        "Detail": "Note is incoherent, contradictory, or contains nonsensical content."
+      }
+    ],
+    "message_sent": "Hi Hajar,\n\nFrom your shift yesterday (Mon 08 Jun) \u2014 I need you to sort these out by 5 PM today:\n\n\ud83d\udfe0 Nicole Loveless \u2014 Note does not meet NDIS progress note requirements. Issues: Note is truncated/incomplet\u2026\n\ud83d\udfe0 Nicole Loveless \u2014 Note is incoherent, contradictory, or contains nonsensical content.\n\nReply and let me know what happened and what you've done to fix it \u2014 need to hear back by 5 PM.\n\nCheers",
+    "channel": "connecteam",
+    "status": "Sent",
+    "acknowledged_at": null,
+    "resolved_at": null,
+    "manager_notes": "",
+    "automated": true,
+    "dry_run": false
+  },
+  {
+    "id": "ec3cc666",
+    "worker": "Roja Mehmood",
+    "worker_id": 2467746,
+    "sent_at": "09 Jun 2026, 10:32 PM",
+    "sent_at_iso": "2026-06-09T22:32:30.100016+10:00",
+    "period": "yesterday (Mon 08 Jun)",
+    "severity_counts": {
+      "HIGH": 7
+    },
+    "issue_count": 7,
+    "issues": [
+      {
+        "Severity": "HIGH",
+        "Issue": "AUTO CLOCK-OUT",
+        "Client": "Kallan Jordan",
+        "Date": "Mon 08-Jun",
+        "Detail": "System force-closed shift at 21:10. Worker failed to clock out manually."
+      },
+      {
+        "Severity": "HIGH",
+        "Issue": "GPS MISMATCH",
+        "Client": "Kallan Jordan",
+        "Date": "Mon 08-Jun",
+        "Detail": "Clocked in 2.2km from client's address (allowed radius: 0.50km \u00b7 location: Carolyn Cr, 18, Bundoora, Australia, 3083)."
+      },
+      {
+        "Severity": "HIGH",
+        "Issue": "GPS MISMATCH",
+        "Client": "Kallan Jordan",
+        "Date": "Tue 09-Jun",
+        "Detail": "Clocked in 2.0km from client's address (allowed radius: 0.50km \u00b7 location: Cameron Pde, 113, Bundoora, Australia, 3083)."
+      },
+      {
+        "Severity": "HIGH",
+        "Issue": "NO SHIFT NOTES",
+        "Client": "Kallan Jordan",
+        "Date": "Mon 08-Jun",
+        "Detail": "No shift note fields submitted at all."
+      },
+      {
+        "Severity": "HIGH",
+        "Issue": "NO SHIFT NOTES",
+        "Client": "Evan Gatt",
+        "Date": "Tue 09-Jun",
+        "Detail": "No shift note fields submitted at all."
+      },
+      {
+        "Severity": "HIGH",
+        "Issue": "NO SHIFT NOTES",
+        "Client": "Kallan Jordan",
+        "Date": "Tue 09-Jun",
+        "Detail": "No shift note fields submitted at all."
+      },
+      {
+        "Severity": "HIGH",
+        "Issue": "UNDERSTAFFED -- RATIO BREACH",
+        "Client": "Kallan Jordan",
+        "Date": "Mon 08-Jun",
+        "Detail": "Expected 2:1 ratio -- only 1 worker(s) clocked in for 15:00\u201321:00."
+      }
+    ],
+    "message_sent": "Hi Roja,\n\nFrom your shift yesterday (Mon 08 Jun) \u2014 I need you to sort these out by 5 PM today:\n\n\ud83d\udfe0 Kallan Jordan \u2014 System force-closed shift at 21:10. Worker failed to clock out manually.\n\ud83d\udfe0 Kallan Jordan \u2014 Clocked in 2.2km from client's address (allowed radius: 0.50km \u00b7 location: Carolyn Cr, \u2026\n\ud83d\udfe0 Kallan Jordan \u2014 Clocked in 2.0km from client's address (allowed radius: 0.50km \u00b7 location: Cameron Pde,\u2026\n\ud83d\udfe0 Kallan Jordan \u2014 No shift note fields submitted at all.\n\ud83d\udfe0 Evan Gatt \u2014 No shift note fields submitted at all.\n\ud83d\udfe0 Kallan Jordan \u2014 No shift note fields submitted at all.\n\ud83d\udfe0 Kallan Jordan \u2014 Expected 2:1 ratio -- only 1 worker(s) clocked in for 15:00\u201321:00.\n\nReply and let me know what happened and what you've done to fix it \u2014 need to hear back by 5 PM.\n\nCheers",
+    "channel": "connecteam",
+    "status": "Sent",
+    "acknowledged_at": null,
+    "resolved_at": null,
+    "manager_notes": "",
+    "automated": true,
+    "dry_run": false
+  },
+  {
+    "id": "5b27ad16",
+    "worker": "Mayada El Hassan",
+    "worker_id": 11444927,
+    "sent_at": "09 Jun 2026, 10:32 PM",
+    "sent_at_iso": "2026-06-09T22:32:30.100016+10:00",
+    "period": "yesterday (Mon 08 Jun)",
+    "severity_counts": {
+      "HIGH": 2
+    },
+    "issue_count": 2,
+    "issues": [
+      {
+        "Severity": "HIGH",
+        "Issue": "AUTO CLOCK-OUT",
+        "Client": "Nada Haliem",
+        "Date": "Mon 08-Jun",
+        "Detail": "System force-closed shift at 16:10. Worker failed to clock out manually."
+      },
+      {
+        "Severity": "HIGH",
+        "Issue": "NO SHIFT NOTES",
+        "Client": "Nada Haliem",
+        "Date": "Mon 08-Jun",
+        "Detail": "No shift note fields submitted at all."
+      }
+    ],
+    "message_sent": "Hi Mayada,\n\nFrom your shift yesterday (Mon 08 Jun) \u2014 I need you to sort these out by 5 PM today:\n\n\ud83d\udfe0 Nada Haliem \u2014 System force-closed shift at 16:10. Worker failed to clock out manually.\n\ud83d\udfe0 Nada Haliem \u2014 No shift note fields submitted at all.\n\nReply and let me know what happened and what you've done to fix it \u2014 need to hear back by 5 PM.\n\nCheers",
+    "channel": "connecteam",
+    "status": "Sent",
+    "acknowledged_at": null,
+    "resolved_at": null,
+    "manager_notes": "",
+    "automated": true,
+    "dry_run": false
+  },
+  {
+    "id": "b30fd620",
+    "worker": "Ali Saaram",
+    "worker_id": 14433560,
+    "sent_at": "09 Jun 2026, 10:32 PM",
+    "sent_at_iso": "2026-06-09T22:32:30.100016+10:00",
+    "period": "yesterday (Mon 08 Jun)",
+    "severity_counts": {
+      "HIGH": 6
+    },
+    "issue_count": 6,
+    "issues": [
+      {
+        "Severity": "HIGH",
+        "Issue": "AUTO CLOCK-OUT",
+        "Client": "Kallan Jordan",
+        "Date": "Mon 08-Jun",
+        "Detail": "System force-closed shift at 15:10. Worker failed to clock out manually."
+      },
+      {
+        "Severity": "HIGH",
+        "Issue": "GPS MISMATCH",
+        "Client": "Kallan Jordan",
+        "Date": "Mon 08-Jun",
+        "Detail": "Clocked in 43.6km from client's address (allowed radius: 0.50km \u00b7 location: 3338, Victoria, Australia)."
+      },
+      {
+        "Severity": "HIGH",
+        "Issue": "GPS MISMATCH",
+        "Client": "Kallan Jordan",
+        "Date": "Tue 09-Jun",
+        "Detail": "Clocked in 5.2km from client's address (allowed radius: 0.50km \u00b7 location: Metropolitan Ring Road, Thomastown Victoria 3074, Australia)."
+      },
+      {
+        "Severity": "HIGH",
+        "Issue": "NO SHIFT NOTES",
+        "Client": "Kallan Jordan",
+        "Date": "Mon 08-Jun",
+        "Detail": "No shift note fields submitted at all."
+      },
+      {
+        "Severity": "HIGH",
+        "Issue": "POSSIBLE LATE INCIDENT REPORTING",
+        "Client": "Kallan Incident Report",
+        "Date": "Tue 09-Jun",
+        "Detail": "Entry #332 -- 26h between incident and report. If this was a serious incident, the 24h NDIS Commission notification window may have passed."
+      },
+      {
+        "Severity": "HIGH",
+        "Issue": "UNDERSTAFFED -- RATIO BREACH",
+        "Client": "Kallan Jordan",
+        "Date": "Mon 08-Jun",
+        "Detail": "Expected 2:1 ratio -- only 1 worker(s) clocked in for 09:00\u201315:00."
+      }
+    ],
+    "message_sent": "Hi Ali,\n\nFrom your shift yesterday (Mon 08 Jun) \u2014 I need you to sort these out by 5 PM today:\n\n\ud83d\udfe0 Kallan Jordan \u2014 System force-closed shift at 15:10. Worker failed to clock out manually.\n\ud83d\udfe0 Kallan Jordan \u2014 Clocked in 43.6km from client's address (allowed radius: 0.50km \u00b7 location: 3338, Victo\u2026\n\ud83d\udfe0 Kallan Jordan \u2014 Clocked in 5.2km from client's address (allowed radius: 0.50km \u00b7 location: Metropolitan\u2026\n\ud83d\udfe0 Kallan Jordan \u2014 No shift note fields submitted at all.\n\ud83d\udfe0 Kallan Incident Report \u2014 Entry #332 -- 26h between incident and report. If this was a serious incident, the 24h \u2026\n\ud83d\udfe0 Kallan Jordan \u2014 Expected 2:1 ratio -- only 1 worker(s) clocked in for 09:00\u201315:00.\n\nReply and let me know what happened and what you've done to fix it \u2014 need to hear back by 5 PM.\n\nCheers",
+    "channel": "connecteam",
+    "status": "Sent",
+    "acknowledged_at": null,
+    "resolved_at": null,
+    "manager_notes": "",
+    "automated": true,
+    "dry_run": false
+  },
+  {
+    "id": "1e385300",
+    "worker": "Mohamed Liban",
+    "worker_id": 2455370,
+    "sent_at": "09 Jun 2026, 10:32 PM",
+    "sent_at_iso": "2026-06-09T22:32:30.100016+10:00",
+    "period": "yesterday (Mon 08 Jun)",
+    "severity_counts": {
+      "CRITICAL": 2,
+      "HIGH": 7
+    },
+    "issue_count": 9,
+    "issues": [
+      {
+        "Severity": "CRITICAL",
+        "Issue": "LATE INCIDENT REPORTING",
+        "Client": "Kallan Incident Report",
+        "Date": "Tue 09-Jun",
+        "Detail": "Entry #330 -- occurred Fri 29-May 09:30, reported 11.2 days later. NDIS requires serious incidents within 24h, others within 5 business days."
+      },
+      {
+        "Severity": "CRITICAL",
+        "Issue": "NO CLOCK-IN",
+        "Client": "Kallan Jordan",
+        "Date": "Mon 08-Jun",
+        "Detail": "Rostered 15:00\u201321:00 -- never clocked in."
+      },
+      {
+        "Severity": "HIGH",
+        "Issue": "AUTO CLOCK-OUT",
+        "Client": "Kallan Jordan",
+        "Date": "Mon 08-Jun",
+        "Detail": "System force-closed shift at 15:10. Worker failed to clock out manually."
+      },
+      {
+        "Severity": "HIGH",
+        "Issue": "EARLY CLOCK-OUT",
+        "Client": "Kallan Jordan",
+        "Date": "Tue 09-Jun",
+        "Detail": "Left 90 min early -- scheduled until 15:00, left at 13:29."
+      },
+      {
+        "Severity": "HIGH",
+        "Issue": "LATE CLOCK-IN",
+        "Client": "Kallan Jordan",
+        "Date": "Mon 08-Jun",
+        "Detail": "110 min late -- scheduled 09:00, arrived 10:50."
+      },
+      {
+        "Severity": "HIGH",
+        "Issue": "NO SHIFT NOTES",
+        "Client": "Kallan Jordan",
+        "Date": "Mon 08-Jun",
+        "Detail": "No shift note fields submitted at all."
+      },
+      {
+        "Severity": "HIGH",
+        "Issue": "UNDERSTAFFED -- RATIO BREACH",
+        "Client": "Kallan Jordan",
+        "Date": "Mon 08-Jun",
+        "Detail": "Expected 2:1 ratio -- only 1 worker(s) clocked in for 09:00\u201315:00."
+      },
+      {
+        "Severity": "HIGH",
+        "Issue": "UNDERSTAFFED -- RATIO BREACH",
+        "Client": "Kallan Jordan",
+        "Date": "Tue 09-Jun",
+        "Detail": "Expected 2:1 ratio -- only 1 worker(s) clocked in for 15:00\u201321:00."
+      },
+      {
+        "Severity": "HIGH",
+        "Issue": "UNDERSTAFFED -- RATIO BREACH",
+        "Client": "Kallan Jordan",
+        "Date": "Tue 09-Jun",
+        "Detail": "Expected 2:1 ratio -- only 1 worker(s) clocked in for 09:00\u201315:00."
+      }
+    ],
+    "message_sent": "Hi Mohamed,\n\nFrom your shift yesterday (Mon 08 Jun) \u2014 I need you to sort these out by 5 PM today:\n\n\ud83d\udd34 Kallan Incident Report \u2014 Entry #330 -- occurred Fri 29-May 09:30, reported 11.2 days later. NDIS requires seriou\u2026\n\ud83d\udd34 Kallan Jordan \u2014 Rostered 15:00\u201321:00 -- never clocked in.\n\ud83d\udfe0 Kallan Jordan \u2014 System force-closed shift at 15:10. Worker failed to clock out manually.\n\ud83d\udfe0 Kallan Jordan \u2014 Left 90 min early -- scheduled until 15:00, left at 13:29.\n\ud83d\udfe0 Kallan Jordan \u2014 110 min late -- scheduled 09:00, arrived 10:50.\n\ud83d\udfe0 Kallan Jordan \u2014 No shift note fields submitted at all.\n\ud83d\udfe0 Kallan Jordan \u2014 Expected 2:1 ratio -- only 1 worker(s) clocked in for 09:00\u201315:00.\n\ud83d\udfe0 Kallan Jordan \u2014 Expected 2:1 ratio -- only 1 worker(s) clocked in for 15:00\u201321:00.\n(+ 1 more)\n\nReply and let me know what happened and what you've done to fix it \u2014 need to hear back by 5 PM.\n\nCheers",
+    "channel": "connecteam",
+    "status": "Sent",
+    "acknowledged_at": null,
+    "resolved_at": null,
+    "manager_notes": "",
+    "automated": true,
+    "dry_run": false
+  },
+  {
+    "id": "f85fb5ef",
+    "worker": "Peter Eronmwon",
+    "worker_id": 2200746,
+    "sent_at": "09 Jun 2026, 10:32 PM",
+    "sent_at_iso": "2026-06-09T22:32:30.100016+10:00",
+    "period": "yesterday (Mon 08 Jun)",
+    "severity_counts": {
+      "CRITICAL": 2,
+      "HIGH": 5
+    },
+    "issue_count": 7,
+    "issues": [
+      {
+        "Severity": "CRITICAL",
+        "Issue": "EARLY CLOCK-OUT",
+        "Client": "Joshua Gatt",
+        "Date": "Mon 08-Jun",
+        "Detail": "Left 142 min early -- scheduled until 14:00, left at 11:37."
+      },
+      {
+        "Severity": "CRITICAL",
+        "Issue": "LATE CLOCK-IN",
+        "Client": "Joshua Gatt",
+        "Date": "Tue 09-Jun",
+        "Detail": "214 min late -- scheduled 09:00, arrived 12:34."
+      },
+      {
+        "Severity": "HIGH",
+        "Issue": "EARLY CLOCK-OUT",
+        "Client": "Joshua Gatt",
+        "Date": "Tue 09-Jun",
+        "Detail": "Left 73 min early -- scheduled until 14:00, left at 12:47."
+      },
+      {
+        "Severity": "HIGH",
+        "Issue": "FAILS NDIS STANDARD",
+        "Client": "Joshua Gatt",
+        "Date": "Tue 09-Jun",
+        "Detail": "Note does not meet NDIS progress note requirements. Issues: Significant concern: Participant remained asleep for entire 0.2 hour shift with no supports provided - documentation should clarify if this is appropriate use of NDIS funding; No mention of Joshua's wellbeing or condition during sleep; No actual supports documented - worker only waited then left; Discrepancy in shift duration: listed as 0.2 hours but text suggests shift was longer (9 AM to 11:20 AM = 2.3 hours); Formal AI-style language: 'My shift commenced', 'Upon arrival'; Raises questions about whether this shift should have been scheduled or charged"
+      },
+      {
+        "Severity": "HIGH",
+        "Issue": "GPS MISMATCH",
+        "Client": "Joshua Gatt",
+        "Date": "Tue 09-Jun",
+        "Detail": "Clocked in 13.3km from client's address (allowed radius: 0.50km \u00b7 location: Harvest Ct, 76, Doncaster, Australia, 3108)."
+      },
+      {
+        "Severity": "HIGH",
+        "Issue": "LATE CLOCK-IN",
+        "Client": "Joshua Gatt",
+        "Date": "Mon 08-Jun",
+        "Detail": "65 min late -- scheduled 09:00, arrived 10:05."
+      },
+      {
+        "Severity": "HIGH",
+        "Issue": "SUSPICIOUSLY SHORT SHIFT",
+        "Client": "Joshua Gatt",
+        "Date": "Tue 09-Jun",
+        "Detail": "Shift lasted only 13 min (12:34\u201312:47) -- possible clock error or fraudulent entry."
+      }
+    ],
+    "message_sent": "Hi Peter,\n\nFrom your shift yesterday (Mon 08 Jun) \u2014 I need you to sort these out by 5 PM today:\n\n\ud83d\udd34 Joshua Gatt \u2014 Left 142 min early -- scheduled until 14:00, left at 11:37.\n\ud83d\udd34 Joshua Gatt \u2014 214 min late -- scheduled 09:00, arrived 12:34.\n\ud83d\udfe0 Joshua Gatt \u2014 Left 73 min early -- scheduled until 14:00, left at 12:47.\n\ud83d\udfe0 Joshua Gatt \u2014 Note does not meet NDIS progress note requirements. Issues: Significant concern: Partic\u2026\n\ud83d\udfe0 Joshua Gatt \u2014 Clocked in 13.3km from client's address (allowed radius: 0.50km \u00b7 location: Harvest Ct,\u2026\n\ud83d\udfe0 Joshua Gatt \u2014 65 min late -- scheduled 09:00, arrived 10:05.\n\ud83d\udfe0 Joshua Gatt \u2014 Shift lasted only 13 min (12:34\u201312:47) -- possible clock error or fraudulent entry.\n\nReply and let me know what happened and what you've done to fix it \u2014 need to hear back by 5 PM.\n\nCheers",
+    "channel": "connecteam",
+    "status": "Sent",
+    "acknowledged_at": null,
+    "resolved_at": null,
+    "manager_notes": "",
+    "automated": true,
+    "dry_run": false
+  }
+]
