@@ -43,26 +43,44 @@ def save_log(entries):
 
 
 def build_message(worker_name, issues, period_label):
+    """Generate a natural compliance message via Claude, falling back to plain text."""
+    from connecteam_audit import ANTHROPIC_API_KEY
     first = worker_name.split()[0]
-    SEV_ICON = {"CRITICAL": "🔴", "HIGH": "🟠", "MEDIUM": "🟡", "LOW": "🟢"}
-    lines = [
-        f"Hi {first},",
-        "",
-        f"From your shift {period_label} — I need you to sort these out by 5 PM today:",
-        "",
-    ]
+
+    issue_lines = []
     for iss in issues[:8]:
-        icon   = SEV_ICON.get(iss["severity"], "•")
-        detail = iss["detail"][:87] + "…" if len(iss["detail"]) > 90 else iss["detail"]
-        lines.append(f"{icon} {iss['client']} — {detail}")
+        issue_lines.append(f"- [{iss['severity']}] {iss['client']}: {iss['detail']}")
     if len(issues) > 8:
-        lines.append(f"(+ {len(issues) - 8} more)")
-    lines += [
-        "",
-        "Reply and let me know what happened and what you've done to fix it — need to hear back by 5 PM.",
-        "",
-        "Cheers",
-    ]
+        issue_lines.append(f"(plus {len(issues) - 8} more issues)")
+    issues_block = "\n".join(issue_lines)
+
+    if ANTHROPIC_API_KEY:
+        try:
+            import anthropic
+            client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+            prompt = f"""You are Amy, a coordinator at Connect Care. Write a message to a support worker called {first} about compliance issues from their shift {period_label}.
+
+Issues:
+{issues_block}
+
+Write it as a natural, conversational text message — like a real person would send, not a system. Keep it brief and direct. Mention the specific issues clearly but don't make it sound robotic or corporate. No bullet points with icons. No "I need you to sort these out by 5 PM" phrasing. Ask them to reply and let you know what happened. 4-6 sentences max. Just the message text."""
+            resp = client.messages.create(
+                model="claude-haiku-4-5",
+                max_tokens=300,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            return resp.content[0].text.strip()
+        except Exception:
+            pass
+
+    # Plain text fallback
+    lines = [f"Hi {first},\n"]
+    lines.append(f"Just following up on your shift {period_label} — there are a few things that need sorting:\n")
+    for iss in issues[:8]:
+        lines.append(f"- {iss['client']}: {iss['detail']}")
+    if len(issues) > 8:
+        lines.append(f"(plus {len(issues) - 8} more)")
+    lines.append(f"\nCan you let me know what happened and what you've done to fix it?\n\nCheers")
     return "\n".join(lines)
 
 

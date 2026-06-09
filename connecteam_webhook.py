@@ -32,9 +32,15 @@ import json
 import hmac
 import hashlib
 import math
+import time
+import random
+import threading
 import datetime
 import requests
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from zoneinfo import ZoneInfo
+
+AEST = ZoneInfo("Australia/Melbourne")
 
 # Paths
 NOTIFICATIONS_FILE = os.environ.get("NOTIFICATIONS_FILE", "notifications_log.json")
@@ -293,7 +299,7 @@ def post_to_conversation(conv_id, text):
         r = requests.post(
             f"{BASE_URL}/chat/v1/conversations/{conv_id}/message",
             headers={"X-API-KEY": CT_KEY, "Content-Type": "application/json"},
-            json={"senderId": SENDER_ID, "text": text[:1000]},
+            json={"senderId": SENDER_ID, "text": text[:4000]},
             timeout=15,
         )
         return r.ok
@@ -318,7 +324,7 @@ def send_connecteam_chat(user_id, text):
             r = requests.post(
                 f"{BASE_URL}/chat/v1/conversations/{conv_id}/message",
                 headers={"X-API-KEY": CT_KEY, "Content-Type": "application/json"},
-                json={"senderId": sender_id, "text": text[:1000]},
+                json={"senderId": sender_id, "text": text[:4000]},
                 timeout=15,
             )
             if r.ok:
@@ -331,7 +337,7 @@ def send_connecteam_chat(user_id, text):
         r = requests.post(
             f"{BASE_URL}/chat/v1/conversations/privateMessage/{user_id}",
             headers={"X-API-KEY": CT_KEY, "Content-Type": "application/json"},
-            json={"senderId": sender_id, "text": text[:1000]},
+            json={"senderId": sender_id, "text": text[:4000]},
             timeout=15,
         )
         return r.ok
@@ -782,6 +788,131 @@ def handle_form_submitted(data):
     print(f"  Form {form_id} submitted by {worker}")
 
 
+# ── Shift-end compliance checker (background thread) ─────────────────────────
+
+SCHEDULER_ID    = 1775479
+_shift_notified = set()   # (user_id, shift_id) — in-memory dedup across checks
+
+
+def _shift_check_loop():
+    """Poll every 10 min for shifts that ended 20-55 min ago and haven't been checked."""
+    time.sleep(15)  # brief startup delay
+    while True:
+        try:
+            _check_recently_ended_shifts()
+        except Exception as e:
+            print(f"[shift-check] error: {e}")
+        time.sleep(600)
+
+
+def _check_recently_ended_shifts():
+    if not CT_KEY:
+        return
+    now_ts = time.time()
+    aest_now = datetime.datetime.now(AEST)
+    today_start = int(aest_now.replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
+    today_end   = int(aest_now.replace(hour=23, minute=59, second=59, microsecond=0).timestamp())
+
+    r = requests.get(
+        f"{BASE_URL}/scheduler/v1/schedulers/{SCHEDULER_ID}/shifts",
+        headers={"X-API-KEY": CT_KEY},
+        params={"startTime": today_start, "endTime": today_end, "limit": 50},
+        timeout=15,
+    )
+    if not r.ok:
+        return
+
+    shifts = (r.json().get("data") or {}).get("shifts") or []
+
+    for shift in shifts:
+        end_ts   = shift.get("endTime", 0)
+        shift_id = shift.get("id", "")
+        age      = now_ts - end_ts
+
+        # Only act on shifts that ended between 20 and 55 minutes ago
+        if not (20 * 60 <= age <= 55 * 60):
+            continue
+
+        assigned = shift.get("assignedUserIds") or []
+        job_id   = shift.get("jobId")
+
+        for uid in assigned:
+            if uid in OBSERVER_IDS:
+                continue
+            key = (uid, shift_id)
+            if key in _shift_notified:
+                continue
+            _shift_notified.add(key)
+            try:
+                _run_shift_end_check(uid, job_id, end_ts, shift)
+            except Exception as e:
+                print(f"[shift-check] check failed for user {uid}: {e}")
+
+
+def _run_shift_end_check(user_id, job_id, sched_end_ts, shift):
+    """Check a single worker's shift compliance after it should have ended."""
+    worker_name = get_worker_name(user_id)
+    client_name = get_job_name(job_id) if job_id else "your client"
+    first       = worker_name.split()[0]
+    end_dt      = datetime.datetime.fromtimestamp(sched_end_ts, tz=AEST)
+    today       = end_dt.strftime("%Y-%m-%d")
+
+    data    = ct_get(f"/time-clock/v1/time-clocks/{TIME_CLOCK_ID}/time-activities",
+                     {"startDate": today, "endDate": today})
+    by_user = (data.get("data") or {}).get("timeActivitiesByUsers") or []
+
+    activity = None
+    for entry in by_user:
+        if str(entry.get("userId")) == str(user_id):
+            all_shifts = entry.get("shifts") or []
+            # Match the shift closest to the scheduled start (sched_end - shift_duration)
+            if all_shifts:
+                activity = min(all_shifts,
+                               key=lambda s: abs((s.get("start") or {}).get("timestamp", 0)
+                                                 - (sched_end_ts - 6 * 3600)))
+            break
+
+    flags = []
+
+    if not activity:
+        flags.append(f"no clock-in found for your {end_dt.strftime('%I:%M %p').lstrip('0')} shift at {client_name}")
+    else:
+        clock_out = (activity.get("end") or {}).get("timestamp")
+        if not clock_out:
+            flags.append(f"still clocked in at {client_name} — shift was scheduled to finish at {end_dt.strftime('%I:%M %p').lstrip('0')}")
+
+        atts  = activity.get("shiftAttachments") or []
+        note  = get_note_text(atts)
+        if not note or len(note.split()) < 10:
+            flags.append("shift notes haven't come through yet")
+
+    if not flags:
+        print(f"[shift-check] {worker_name} ({client_name}) all good")
+        return
+
+    msg = _generate_shift_end_msg(first, client_name, flags)
+    sent = send_connecteam_chat(user_id, msg)
+    if sent:
+        set_last_amy_message(user_id, msg)
+    print(f"[shift-check] notified {worker_name}: {flags}")
+
+
+def _generate_shift_end_msg(first_name, client_name, flags):
+    """Ask Claude to write a natural follow-up — falls back to a simple template."""
+    issues_desc = " and ".join(flags)
+    if not ANTHROPIC_API_KEY:
+        return f"Hey {first_name}, just checking on your shift at {client_name} — {issues_desc}. Can you sort that when you get a chance?"
+
+    prompt = f"""You are Amy, a coordinator at Connect Care. You need to follow up with a support worker called {first_name} about their shift at {client_name}.
+
+Issue(s): {issues_desc}
+
+Write a casual, natural follow-up text message. Sound like a real person — not a system, not corporate. Keep it brief (2 sentences max). No emojis. Don't start with "Hi" or "Hey" every time — vary your opening. Just the message, nothing else."""
+
+    result = _call_claude(prompt)
+    return result or f"Hey {first_name}, just a quick one — {issues_desc} for {client_name}. Can you jump on that?"
+
+
 # ── HTTP Server ───────────────────────────────────────────────────────────────
 
 class WebhookHandler(BaseHTTPRequestHandler):
@@ -842,5 +973,7 @@ class WebhookHandler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     print(f"Starting Connect Care webhook receiver on port {PORT}...")
+    threading.Thread(target=_shift_check_loop, daemon=True).start()
+    print("Shift-end compliance checker started (polls every 10 min).")
     server = HTTPServer(("0.0.0.0", PORT), WebhookHandler)
     server.serve_forever()

@@ -1,9 +1,9 @@
-name: Compliance Audit & Notify
+name: Daily Compliance Audit & Notify
 
 on:
   schedule:
-    # Every 2 hours between 6 AM and 11 PM AEST (UTC+10 = 20:00 UTC – 13:00 UTC)
-    - cron: "0 20,22,0,2,4,6,8,10,12 * * *"
+    # 9:00 PM UTC = 7:00 AM AEST — morning catch-all for anything missed overnight
+    - cron: "0 21 * * *"
   workflow_dispatch:
 
 concurrency:

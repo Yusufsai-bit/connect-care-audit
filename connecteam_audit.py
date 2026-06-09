@@ -737,7 +737,7 @@ def send_worker_message(user_id, text, worker_name=None):
         # Route to the per-worker group conversation
         ok, result = ct_post(
             f"/chat/v1/conversations/{conv_id}/message",
-            {"senderId": CONNECTEAM_SENDER_ID, "text": text[:1000]},
+            {"senderId": CONNECTEAM_SENDER_ID, "text": text[:4000]},
         )
         if not ok:
             return False, result
@@ -747,7 +747,7 @@ def send_worker_message(user_id, text, worker_name=None):
     # Fallback: private message to worker + separate CC to each observer
     ok, result = ct_post(
         f"/chat/v1/conversations/privateMessage/{user_id}",
-        {"senderId": CONNECTEAM_SENDER_ID, "text": text[:1000]},
+        {"senderId": CONNECTEAM_SENDER_ID, "text": text[:4000]},
     )
     if not ok:
         return False, result
