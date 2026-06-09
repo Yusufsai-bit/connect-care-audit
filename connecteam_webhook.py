@@ -62,7 +62,8 @@ CT_KEY            = os.environ.get("CONNECTEAM_API_KEY", "")
 BASE_URL          = "https://api.connecteam.com"
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 SENDER_ID         = int(os.environ.get("CONNECTEAM_SENDER_ID", "0") or "0")
-MANAGER_USER_ID   = 2149475  # Yusuf — receives escalations and can relay replies
+MANAGER_USER_ID   = 2149475  # Yusuf
+CC_MGMT_CONV_ID   = os.environ.get("CC_MGMT_CONV_ID", "4a14c09d-bc9f-46f2-9ad9-a728d6ddcbf6")
 
 # GitHub API sync — allows webhook to persist acknowledgements back to the repo
 # so the dashboard and GitHub Actions always see up-to-date notification status.
@@ -70,9 +71,9 @@ GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 GITHUB_REPO  = os.environ.get("GITHUB_REPO", "Yusufsai-bit/connect-care-audit")
 LOG_PATH     = "notifications_log.json"
 
-# Pending relay store — in-memory dict: manager_reply will be forwarded to this worker
-# Format: { str(manager_user_id): { "worker_id": ..., "worker_name": ... } }
-PENDING_RELAYS = {}
+# Queue of complex worker replies waiting for a manager response from CC Management.
+# Each entry: {"worker_id": ..., "worker_name": ..., "reply": ..., "issues": [...]}
+PENDING_RELAY_QUEUE = []
 
 # ── Notification log helpers ──────────────────────────────────────────────────
 
@@ -253,6 +254,22 @@ def send_msg(phone, text):
         return True
     except Exception as e:
         print(f"  [ERROR] Message send failed: {e}")
+        return False
+
+
+def post_to_conversation(conv_id, text):
+    """Post a message to a specific Connecteam group conversation."""
+    if not SENDER_ID or not CT_KEY:
+        return False
+    try:
+        r = requests.post(
+            f"{BASE_URL}/chat/v1/conversations/{conv_id}/message",
+            headers={"X-API-KEY": CT_KEY, "Content-Type": "application/json"},
+            json={"senderId": SENDER_ID, "text": text[:1000]},
+            timeout=15,
+        )
+        return r.ok
+    except Exception:
         return False
 
 
@@ -551,28 +568,34 @@ def handle_chat_reply(data):
     """
     Worker replied in Connecteam Chat.
     Flow:
-      1. If this is the manager (Yusuf) replying → relay their message to the pending worker as Amy.
-      2. Otherwise classify the worker's reply:
+      1. Message from CC Management chat by a manager → relay to the next pending worker as Amy.
+      2. Message from a worker:
          - Simple  → Amy sends an AI-generated acknowledgement.
-         - Complex → Amy sends a holding reply, then messages Yusuf with context so he can relay.
+         - Complex → Amy sends a holding reply to the worker, posts context to CC Management.
+                     When any manager replies there, Amy forwards their words to the worker.
     """
     user_id = data.get("userId") or data.get("senderId")
     text    = (data.get("text") or "").strip()
+    conv_id = str(data.get("conversationId") or data.get("channelId") or "")
     if not user_id or not text:
         return
 
     uid = int(user_id)
 
-    # ── Manager relay: Yusuf is replying to Amy's escalation ──────────────────
-    if uid == MANAGER_USER_ID and str(uid) in PENDING_RELAYS:
-        relay   = PENDING_RELAYS.pop(str(uid))
-        wid     = relay["worker_id"]
-        wname   = relay["worker_name"]
-        print(f"  Relaying manager reply to {wname}: '{text[:80]}'")
-        send_connecteam_chat(wid, text)
+    # ── Manager replied in CC Management → relay to pending worker ────────────
+    if conv_id == CC_MGMT_CONV_ID and uid in OBSERVER_IDS:
+        if PENDING_RELAY_QUEUE:
+            relay = PENDING_RELAY_QUEUE.pop(0)
+            wid   = relay["worker_id"]
+            wname = relay["worker_name"]
+            send_connecteam_chat(wid, text)
+            print(f"  Relayed CC Management response to {wname}: '{text[:80]}'")
+            # If more pending, post next one to CC Management now
+            if PENDING_RELAY_QUEUE:
+                _post_to_cc_mgmt(PENDING_RELAY_QUEUE[0])
         return
 
-    # ── Ignore messages from observers (Nada, Faduma, etc.) ───────────────────
+    # ── Ignore other observer messages ─────────────────────────────────────────
     if uid in OBSERVER_IDS:
         return
 
@@ -581,32 +604,38 @@ def handle_chat_reply(data):
     print(f"  Chat reply from {worker}: '{text[:80]}'")
 
     # ── Classify and respond ───────────────────────────────────────────────────
-    issues     = get_worker_issues(user_id)
+    issues              = get_worker_issues(user_id)
     is_complex, amy_reply = classify_and_reply(worker, text, issues)
 
     if amy_reply and SENDER_ID and CT_KEY:
         send_connecteam_chat(user_id, amy_reply)
-        print(f"  Amy replied ({'complex/holding' if is_complex else 'simple/resolved'}): '{amy_reply[:80]}'")
+        print(f"  Amy replied ({'holding' if is_complex else 'resolved'}): '{amy_reply[:80]}'")
 
-    # ── Escalate complex replies to manager ───────────────────────────────────
-    if is_complex and SENDER_ID and CT_KEY:
-        first = worker.split()[0]
-        issues_summary = "\n".join(
-            f"  • [{i.get('Severity','?')}] {i.get('Issue','?')} — {i.get('Detail','')[:80]}"
-            for i in (issues or [])[:4]
-        ) or "  (no issues on record)"
-        mgr_msg = (
-            f"{first} replied to Amy's compliance message:\n\n"
-            f"\"{text}\"\n\n"
-            f"Original issues:\n{issues_summary}\n\n"
-            f"Reply to this message and Amy will forward your exact words to {first}."
-        )
-        send_connecteam_chat(MANAGER_USER_ID, mgr_msg)
-        PENDING_RELAYS[str(MANAGER_USER_ID)] = {
-            "worker_id":   user_id,
-            "worker_name": worker,
-        }
-        print(f"  Escalated {worker}'s reply to manager — relay pending.")
+    # ── Escalate complex replies to CC Management ──────────────────────────────
+    if is_complex:
+        relay = {"worker_id": user_id, "worker_name": worker, "reply": text, "issues": issues}
+        PENDING_RELAY_QUEUE.append(relay)
+        if len(PENDING_RELAY_QUEUE) == 1:  # Post immediately if no other pending
+            _post_to_cc_mgmt(relay)
+        print(f"  Escalated {worker}'s reply to CC Management — relay queued ({len(PENDING_RELAY_QUEUE)} pending)")
+
+
+def _post_to_cc_mgmt(relay):
+    """Post a worker's complex reply to CC Management so a manager can respond."""
+    worker = relay["worker_name"]
+    first  = worker.split()[0]
+    issues_summary = "\n".join(
+        f"• [{i.get('Severity','?')}] {i.get('Issue','?')} — {i.get('Detail','')[:80]}"
+        for i in (relay.get("issues") or [])[:4]
+    ) or "(no issues on record)"
+
+    msg = (
+        f"{first} replied to Amy's compliance message:\n\n"
+        f"\"{relay['reply']}\"\n\n"
+        f"Original issues flagged:\n{issues_summary}\n\n"
+        f"Reply here and Amy will send your response directly to {first}."
+    )
+    post_to_conversation(CC_MGMT_CONV_ID, msg)
 
 
 def handle_form_submitted(data):
