@@ -1,9 +1,9 @@
-name: Daily Compliance Audit & Notify
+name: Compliance Audit & Notify
 
 on:
   schedule:
-    # 9:00 PM UTC = 7:00 AM AEST / 8:00 AM AEDT — runs at 7-8 AM Melbourne time
-    - cron: "0 21 * * *"
+    # Every 2 hours between 6 AM and 11 PM AEST (UTC+10 = 20:00 UTC – 13:00 UTC)
+    - cron: "0 20,22,0,2,4,6,8,10,12 * * *"
   workflow_dispatch:
 
 concurrency:

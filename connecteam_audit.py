@@ -1149,8 +1149,11 @@ def run_audit(days_back=7):
                     f"{late_min} min late -- scheduled {s_str}, arrived {ts_aest(clock_in).strftime('%H:%M')}."))
 
             if not clock_out:
-                issues.append(Issue("HIGH", "MISSING CLOCK-OUT", name, client, dlabel,
-                    "Clocked in but never clocked out -- shift still open."))
+                # Only flag once 30 minutes past the scheduled end time
+                if now.timestamp() > sched_end + 1800:
+                    overdue_min = round((now.timestamp() - sched_end) / 60)
+                    issues.append(Issue("HIGH", "MISSING CLOCK-OUT", name, client, dlabel,
+                        f"Scheduled until {e_str} — still clocked in, {overdue_min} min past end time."))
             else:
                 # Early clock-out
                 early_secs = sched_end - clock_out
@@ -1197,12 +1200,13 @@ def run_audit(days_back=7):
                 issues.append(Issue("MEDIUM", "UNSCHEDULED SHIFT", name, client, dlabel,
                     f"Clocked in at {ts_aest(clock_in).strftime('%H:%M')} with no matching roster entry."))
 
-            # Missing clock-out — only flag if shift is old enough to not be in progress
+            # Missing clock-out — flag 30 min after a reasonable shift would have ended.
+            # Unscheduled shifts: use 8h as the expected max duration (no roster to compare against).
             if not clock_out:
                 hours_open = (now.timestamp() - clock_in) / 3600
-                if hours_open > 14:
+                if hours_open > 8.5:
                     issues.append(Issue("HIGH", "MISSING CLOCK-OUT", name, client, dlabel,
-                        f"Clocked in {round(hours_open)}h ago — never clocked out."))
+                        f"Clocked in {round(hours_open)}h ago — never clocked out (unscheduled shift)."))
                 continue
 
             # Auto clock-out on unscheduled shift

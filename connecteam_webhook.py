@@ -75,6 +75,34 @@ LOG_PATH     = "notifications_log.json"
 # Each entry: {"worker_id": ..., "worker_name": ..., "reply": ..., "issues": [...]}
 PENDING_RELAY_QUEUE = []
 
+AMY_MEMORY_FILE = os.path.join(os.path.dirname(__file__) or ".", "amy_conversation_log.json")
+
+
+def load_amy_memory():
+    try:
+        with open(AMY_MEMORY_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def save_amy_memory(memory):
+    try:
+        with open(AMY_MEMORY_FILE, "w", encoding="utf-8") as f:
+            json.dump(memory, f, indent=2)
+    except Exception:
+        pass
+
+
+def get_last_amy_message(user_id):
+    return load_amy_memory().get(str(user_id), "")
+
+
+def set_last_amy_message(user_id, text):
+    memory = load_amy_memory()
+    memory[str(user_id)] = text
+    save_amy_memory(memory)
+
 # ── Notification log helpers ──────────────────────────────────────────────────
 
 def load_notifications():
@@ -496,7 +524,9 @@ def handle_clock_out(data):
     msg = "\n\n".join(lines)
 
     sent = send_connecteam_chat(user_id, msg)
-    if not sent:
+    if sent:
+        set_last_amy_message(user_id, msg)
+    else:
         phone = get_worker_phone(user_id)
         if phone:
             send_msg(phone, msg)
@@ -586,7 +616,7 @@ def _call_claude(prompt, max_tokens=300):
         return None
 
 
-def generate_amy_reply(worker_name, text, issues, verification=""):
+def generate_amy_reply(worker_name, text, issues, verification="", previous_amy_msg=""):
     """
     Classify the worker's message and generate Amy's reply.
     Returns (is_complex: bool, reply_text: str).
@@ -601,13 +631,14 @@ def generate_amy_reply(worker_name, text, issues, verification=""):
         for i in (issues or [])[:5]
     ) or "No open compliance issues."
 
-    verification_line = f"\nVerification check: {verification}" if verification else ""
+    verification_line   = f"\nVerification check: {verification}" if verification else ""
+    prior_line          = f"\nYour last message to them: \"{previous_amy_msg}\"" if previous_amy_msg else ""
 
     prompt = f"""You are Amy, a coordinator at Connect Care. You're messaging a support worker on a work chat app.
 
 Worker: {worker_name}
 Their compliance issues:
-{issues_summary}{verification_line}
+{issues_summary}{verification_line}{prior_line}
 
 Their message:
 "{text}"
@@ -616,7 +647,7 @@ Decide:
 - SIMPLE: they've sorted it, explained it, or it doesn't need escalating
 - COMPLEX: they're asking something, pushing back, or it needs a management call
 
-If SIMPLE: reply like a real person would over text — casual, warm, brief. Max 2 sentences. Don't say "noted", "acknowledged", "I've logged this", "confirmed" or anything corporate. Just sound like a normal person. If verification shows notes are there, say something like "all good, can see them now". If notes aren't there yet, say "can't see them just yet — can you double check they saved properly?"
+If SIMPLE: reply naturally, continuing from where the conversation left off. Casual, warm, brief. Max 2 sentences. Don't say "noted", "acknowledged", "I've logged this", "confirmed" or anything corporate. If verification shows notes are there, say something like "all good, can see them now". If notes aren't there yet, say "can't see them just yet — can you double check they saved properly?"
 If COMPLEX: something like "Thanks [first name], leave it with me and I'll come back to you" — natural, not robotic.
 
 JSON only — no extra text:
@@ -707,11 +738,13 @@ def handle_chat_reply(data):
         print(f"  Verification: {verification}")
 
     # ── Generate Amy's reply ───────────────────────────────────────────────────
-    issues              = get_worker_issues(user_id)
-    is_complex, amy_reply = generate_amy_reply(worker, text, issues, verification)
+    issues          = get_worker_issues(user_id)
+    prior_msg       = get_last_amy_message(user_id)
+    is_complex, amy_reply = generate_amy_reply(worker, text, issues, verification, prior_msg)
 
     if amy_reply and SENDER_ID and CT_KEY:
         send_connecteam_chat(user_id, amy_reply)
+        set_last_amy_message(user_id, amy_reply)
         print(f"  Amy replied ({'holding' if is_complex else 'resolved'}): '{amy_reply[:80]}'")
 
     # ── Complex → ask CC Management what to say ───────────────────────────────
