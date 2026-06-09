@@ -1197,10 +1197,12 @@ def run_audit(days_back=7):
                 issues.append(Issue("MEDIUM", "UNSCHEDULED SHIFT", name, client, dlabel,
                     f"Clocked in at {ts_aest(clock_in).strftime('%H:%M')} with no matching roster entry."))
 
-            # Missing clock-out
+            # Missing clock-out — only flag if shift is old enough to not be in progress
             if not clock_out:
-                issues.append(Issue("HIGH", "MISSING CLOCK-OUT", name, client, dlabel,
-                    "Clocked in but never clocked out."))
+                hours_open = (now.timestamp() - clock_in) / 3600
+                if hours_open > 14:
+                    issues.append(Issue("HIGH", "MISSING CLOCK-OUT", name, client, dlabel,
+                        f"Clocked in {round(hours_open)}h ago — never clocked out."))
                 continue
 
             # Auto clock-out on unscheduled shift
@@ -1276,6 +1278,10 @@ def run_audit(days_back=7):
             dlabel       = date_label(clock_in)
             act_id       = act.get("id", "")
             attachments  = act.get("shiftAttachments") or []
+
+            # Skip note checks for shifts still in progress (no clock-out within last 14h)
+            if not clock_out and (now.timestamp() - clock_in) / 3600 <= 14:
+                continue
 
             # Missing signature
             if attachments and not has_signature(attachments):
