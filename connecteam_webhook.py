@@ -22,6 +22,7 @@ Environment variables:
   TWILIO_WHATSAPP_NUMBER
   CONNECTEAM_SENDER_ID
   MANAGER_NUMBER      — manager's mobile for critical alerts
+  ANTHROPIC_API_KEY   — enables AI-powered chat replies (optional, falls back to template)
   PORT                — default 8080
 """
 
@@ -57,14 +58,21 @@ if not WEBHOOK_SECRET:
     print("[WARNING] WEBHOOK_SECRET is not set — any caller can POST to this endpoint. Set it in Railway env vars.")
 
 # Connecteam / Twilio credentials
-CT_KEY       = os.environ.get("CONNECTEAM_API_KEY", "")
-BASE_URL     = "https://api.connecteam.com"
+CT_KEY            = os.environ.get("CONNECTEAM_API_KEY", "")
+BASE_URL          = "https://api.connecteam.com"
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+SENDER_ID         = int(os.environ.get("CONNECTEAM_SENDER_ID", "0") or "0")
+MANAGER_USER_ID   = 2149475  # Yusuf — receives escalations and can relay replies
 
 # GitHub API sync — allows webhook to persist acknowledgements back to the repo
 # so the dashboard and GitHub Actions always see up-to-date notification status.
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 GITHUB_REPO  = os.environ.get("GITHUB_REPO", "Yusufsai-bit/connect-care-audit")
 LOG_PATH     = "notifications_log.json"
+
+# Pending relay store — in-memory dict: manager_reply will be forwarded to this worker
+# Format: { str(manager_user_id): { "worker_id": ..., "worker_name": ... } }
+PENDING_RELAYS = {}
 
 # ── Notification log helpers ──────────────────────────────────────────────────
 
@@ -471,38 +479,134 @@ def load_worker_conversations():
             return {}
 
 
+def get_worker_issues(user_id):
+    """Return the most recent unresolved issues for this worker from the notification log."""
+    notifs = load_notifications()
+    for n in notifs:
+        if str(n.get("worker_id")) == str(user_id) and n.get("status") in ("Sent", "Acknowledged"):
+            return n.get("issues", [])
+    return []
+
+
+def classify_and_reply(worker_name, worker_reply, issues):
+    """
+    Use Claude to classify the reply as simple or complex, and generate a response.
+    Returns (is_complex: bool, reply_text: str).
+    Falls back to simple template if no API key.
+    """
+    if not ANTHROPIC_API_KEY:
+        return False, f"Thanks {worker_name.split()[0]}, noted — I'll pass this on if anything needs following up."
+
+    issues_summary = "\n".join(
+        f"- [{i.get('Severity','?')}] {i.get('Issue','?')}: {i.get('Detail','')[:100]}"
+        for i in (issues or [])[:5]
+    ) or "No specific issues on record."
+
+    prompt = f"""You are Amy, a compliance coordinator at Connect Care disability services.
+A support worker has replied to a compliance message you sent them this morning.
+
+Original issues flagged:
+{issues_summary}
+
+Worker's reply:
+"{worker_reply}"
+
+Decide:
+1. Is this reply SIMPLE (they've acknowledged, fixed the issue, or given a clear explanation that doesn't need manager input)?
+2. Is this reply COMPLEX (they're asking a question, disputing something, explaining an incident, or needs a manager decision)?
+
+If SIMPLE: write a short, warm, professional reply from Amy (2-3 sentences max). Thank them, confirm you've noted it, close it out.
+If COMPLEX: write a short holding reply from Amy (1-2 sentences) that buys time — e.g. "Thanks [first name], I'll look into this and come back to you shortly."
+
+Respond in this exact JSON format:
+{{"is_complex": true/false, "reply": "your reply text here"}}
+
+Rules:
+- Always use their first name
+- Keep it natural and human, not robotic
+- Never mention AI or automation
+- Do not exceed 3 sentences
+- Return ONLY the JSON, no explanation"""
+
+    try:
+        import anthropic
+        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        response = client.messages.create(
+            model="claude-haiku-4-5",
+            max_tokens=256,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = response.content[0].text.strip()
+        if raw.startswith("```"):
+            raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+        result = json.loads(raw)
+        return result.get("is_complex", False), result.get("reply", "")
+    except Exception as e:
+        print(f"  [WARN] AI classify failed: {e}")
+        first = worker_name.split()[0]
+        return False, f"Thanks {first}, noted — I'll follow up if anything else is needed."
+
+
 def handle_chat_reply(data):
     """
     Worker replied in Connecteam Chat.
-    - Marks the notification as Acknowledged in the log.
-    - If per-worker group conversations are mapped, observers already see the reply
-      in the shared thread — no forwarding needed.
-    - Falls back to private forwarding to each observer when no group mapping exists.
+    Flow:
+      1. If this is the manager (Yusuf) replying → relay their message to the pending worker as Amy.
+      2. Otherwise classify the worker's reply:
+         - Simple  → Amy sends an AI-generated acknowledgement.
+         - Complex → Amy sends a holding reply, then messages Yusuf with context so he can relay.
     """
     user_id = data.get("userId") or data.get("senderId")
-    text    = data.get("text", "")
-    if not user_id:
+    text    = (data.get("text") or "").strip()
+    if not user_id or not text:
         return
 
-    if int(user_id) in OBSERVER_IDS:
+    uid = int(user_id)
+
+    # ── Manager relay: Yusuf is replying to Amy's escalation ──────────────────
+    if uid == MANAGER_USER_ID and str(uid) in PENDING_RELAYS:
+        relay   = PENDING_RELAYS.pop(str(uid))
+        wid     = relay["worker_id"]
+        wname   = relay["worker_name"]
+        print(f"  Relaying manager reply to {wname}: '{text[:80]}'")
+        send_connecteam_chat(wid, text)
         return
 
-    updated = mark_acknowledged(user_id)
-    worker  = get_worker_name(user_id) if CT_KEY else str(user_id)
-    print(f"  Chat reply from {worker}: '{text[:80]}' — acknowledged: {updated}")
-
-    # If this worker has a group conversation, observers see the reply there already
-    conv_map = load_worker_conversations()
-    if str(user_id) in conv_map:
+    # ── Ignore messages from observers (Nada, Faduma, etc.) ───────────────────
+    if uid in OBSERVER_IDS:
         return
 
-    # Fallback: forward to each observer individually via private message
-    sender_id = int(os.environ.get("CONNECTEAM_SENDER_ID", "0") or "0")
-    if sender_id and CT_KEY:
-        fwd = f"{worker} replied:\n\n{text}"
-        for oid in OBSERVER_IDS:
-            if str(oid) != str(user_id):
-                send_connecteam_chat(oid, fwd)
+    worker = get_worker_name(user_id) if CT_KEY else str(user_id)
+    mark_acknowledged(user_id)
+    print(f"  Chat reply from {worker}: '{text[:80]}'")
+
+    # ── Classify and respond ───────────────────────────────────────────────────
+    issues     = get_worker_issues(user_id)
+    is_complex, amy_reply = classify_and_reply(worker, text, issues)
+
+    if amy_reply and SENDER_ID and CT_KEY:
+        send_connecteam_chat(user_id, amy_reply)
+        print(f"  Amy replied ({'complex/holding' if is_complex else 'simple/resolved'}): '{amy_reply[:80]}'")
+
+    # ── Escalate complex replies to manager ───────────────────────────────────
+    if is_complex and SENDER_ID and CT_KEY:
+        first = worker.split()[0]
+        issues_summary = "\n".join(
+            f"  • [{i.get('Severity','?')}] {i.get('Issue','?')} — {i.get('Detail','')[:80]}"
+            for i in (issues or [])[:4]
+        ) or "  (no issues on record)"
+        mgr_msg = (
+            f"{first} replied to Amy's compliance message:\n\n"
+            f"\"{text}\"\n\n"
+            f"Original issues:\n{issues_summary}\n\n"
+            f"Reply to this message and Amy will forward your exact words to {first}."
+        )
+        send_connecteam_chat(MANAGER_USER_ID, mgr_msg)
+        PENDING_RELAYS[str(MANAGER_USER_ID)] = {
+            "worker_id":   user_id,
+            "worker_name": worker,
+        }
+        print(f"  Escalated {worker}'s reply to manager — relay pending.")
 
 
 def handle_form_submitted(data):
