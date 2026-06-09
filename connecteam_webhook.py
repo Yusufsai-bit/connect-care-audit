@@ -274,9 +274,31 @@ def post_to_conversation(conv_id, text):
 
 
 def send_connecteam_chat(user_id, text):
+    """
+    Send a message to a worker. Prefers their group conversation (so the reply
+    appears in the same thread they wrote in), falls back to private message.
+    """
     sender_id = int(os.environ.get("CONNECTEAM_SENDER_ID", "0") or "0")
     if not sender_id:
         return False
+
+    # Try group conversation first
+    conv_map = load_worker_conversations()
+    conv_id  = conv_map.get(str(user_id))
+    if conv_id:
+        try:
+            r = requests.post(
+                f"{BASE_URL}/chat/v1/conversations/{conv_id}/message",
+                headers={"X-API-KEY": CT_KEY, "Content-Type": "application/json"},
+                json={"senderId": sender_id, "text": text[:1000]},
+                timeout=15,
+            )
+            if r.ok:
+                return True
+        except Exception:
+            pass
+
+    # Fall back to private message
     try:
         r = requests.post(
             f"{BASE_URL}/chat/v1/conversations/privateMessage/{user_id}",
