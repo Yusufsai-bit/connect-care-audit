@@ -224,7 +224,18 @@ def main():
     sent_ok  = []
     sent_err = []
 
+    # Workers already notified for this same period — don't resend
+    already_notified = {
+        e["worker"]
+        for e in log
+        if e.get("period") == period and e.get("status") in ("Sent", "Pending")
+    }
+    if already_notified:
+        print(f"Already notified today (skipping): {', '.join(sorted(already_notified))}")
+
     for wname, issues_list in notify_workers.items():
+        if wname in already_notified:
+            continue
         wid = (contacts.get(wname) or {}).get("userId")
 
         # Split into credential vs shift issues for targeted messages
