@@ -48,6 +48,7 @@ WEBHOOK_SECRET     = os.environ.get("WEBHOOK_SECRET", "")
 PORT               = int(os.environ.get("PORT", "8080"))
 MANAGER_NUMBER     = os.environ.get("MANAGER_NUMBER", "+61431836771")
 OBSERVER_IDS       = {2149475, 9736871, 2201497}  # Yusuf, Nada, Faduma
+AMY_SENDER_IDS     = {272153}  # Amy's chat sender account — ignore her own messages
 
 # Time clock constants (mirrors connecteam_audit.py)
 TIME_CLOCK_ID    = 1776332
@@ -716,6 +717,10 @@ def handle_chat_reply(data):
         return
 
     uid = int(user_id)
+
+    # Ignore Amy's own messages and observer messages outside CC Management
+    if uid in AMY_SENDER_IDS:
+        return
 
     # ── Manager guidance in CC Management → compose and send to worker ────────
     if conv_id == CC_MGMT_CONV_ID and uid in OBSERVER_IDS:
