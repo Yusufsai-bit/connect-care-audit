@@ -401,6 +401,14 @@ def post_to_conversation(conv_id, text):
         return False
 
 
+def alert_cc_management(text):
+    """Post an alert or status update to the CC Management group (replaces SMS to manager)."""
+    ok = post_to_conversation(CC_MGMT_CONV_ID, text)
+    if not ok:
+        print(f"[WARN] Could not post alert to CC Management: {text[:80]}")
+    return ok
+
+
 def send_connecteam_chat(user_id, text):
     """
     Send a message to a worker. Prefers their group conversation (so the reply
@@ -490,8 +498,8 @@ def handle_admin_time_edit(data):
 
     print(f"  ADMIN TIME EDIT: {editor} edited {worker}'s entry for {client}")
 
-    if MANAGER_NUMBER and CT_KEY:
-        send_msg(MANAGER_NUMBER, alert)
+    if CT_KEY:
+        alert_cc_management(alert)
 
 
 def handle_auto_clock_out(data):
@@ -527,10 +535,10 @@ def handle_shift_change(event_type, data):
     job_id  = data.get("jobId")
     client  = get_job_name(job_id) if job_id else "unknown client"
     verb    = "updated" if "update" in event_type.lower() else "deleted"
-    msg     = f"\U0001f4c5 Roster change: shift for {client} was {verb}.\n\nVerify this change was authorised."
+    msg     = f"📅 Roster change: shift for {client} was {verb}. Verify this change was authorised."
     print(f"  Shift {verb}: {client}")
-    if MANAGER_NUMBER and CT_KEY:
-        send_msg(MANAGER_NUMBER, msg)
+    if CT_KEY:
+        alert_cc_management(msg)
 
 
 def handle_user_change(event_type, data):
@@ -538,10 +546,10 @@ def handle_user_change(event_type, data):
     user_id = data.get("userId")
     name    = get_worker_name(user_id) if (user_id and CT_KEY) else str(user_id)
     verb    = event_type.replace("user", "").strip().lower()
-    msg     = f"\U0001f464 HR change: {name} was {verb}. Verify this change was authorised."
+    msg     = f"👤 HR change: {name} was {verb}. Verify this change was authorised."
     print(f"  User change ({verb}): {name}")
-    if MANAGER_NUMBER and CT_KEY:
-        send_msg(MANAGER_NUMBER, msg)
+    if CT_KEY:
+        alert_cc_management(msg)
 
 
 def handle_clock_out(data):
@@ -868,18 +876,19 @@ def handle_chat_reply(data):
     if uid in AMY_SENDER_IDS:
         return
 
-    # ── Manager guidance in CC Management → compose and send to worker ────────
+    # ── Manager message in CC Management → Amy follows their instructions ────────
     if conv_id == CC_MGMT_CONV_ID and uid in OBSERVER_IDS:
+        text_lower = text.lower()
+
+        # Case A: pending relay — manager is replying about a specific worker
         if PENDING_RELAY_QUEUE:
-            # Try to match which worker the manager is replying about by name mention
-            text_lower = text.lower()
-            matched_idx = 0  # default to oldest
+            matched_idx = 0
             for i, r in enumerate(PENDING_RELAY_QUEUE):
                 first_name = r["worker_name"].split()[0].lower()
                 if first_name in text_lower:
                     matched_idx = i
                     break
-            relay = PENDING_RELAY_QUEUE.pop(matched_idx)
+            relay    = PENDING_RELAY_QUEUE.pop(matched_idx)
             save_pending_relay(PENDING_RELAY_QUEUE)
             wid      = relay["worker_id"]
             wname    = relay["worker_name"]
@@ -889,6 +898,18 @@ def handle_chat_reply(data):
             print(f"  Amy sent composed response to {wname} based on manager guidance")
             if PENDING_RELAY_QUEUE:
                 _post_to_cc_mgmt(PENDING_RELAY_QUEUE[0])
+            return
+
+        # Case B: direct instruction to Amy — e.g. "Amy, message Abdi about his GPS"
+        # Detect: starts with "Amy" or "amy" or "@Amy", and mentions a known worker.
+        is_amy_instruction = (
+            text_lower.startswith("amy") or
+            text_lower.startswith("@amy") or
+            "amy," in text_lower or
+            "amy " in text_lower[:20]
+        )
+        if is_amy_instruction:
+            _handle_manager_instruction(text)
         return
 
     # ── Ignore other observer messages ────────────────────────────────────────
@@ -930,6 +951,89 @@ def handle_chat_reply(data):
         if len(PENDING_RELAY_QUEUE) == 1:
             _post_to_cc_mgmt(relay)
         print(f"  Asked CC Management for guidance on {worker} ({len(PENDING_RELAY_QUEUE)} pending)")
+
+
+def _handle_manager_instruction(instruction):
+    """
+    Manager posted a direct instruction to Amy in CC Management, e.g.:
+      "Amy, message Abdi about his missing notes from yesterday"
+      "Amy, tell everyone shifts are confirmed for next week"
+    Amy reads the instruction, figures out who to message (if anyone), and acts on it.
+    """
+    if not ANTHROPIC_API_KEY:
+        alert_cc_management("Got it — but AI key isn't set so I can't act on instructions right now.")
+        return
+
+    # Ask Claude to parse the instruction and decide what to do
+    prompt = f"""You are Amy, a support coordinator at Connect Care. Your manager just sent you this instruction in a team chat:
+
+"{instruction}"
+
+Decide what to do:
+1. If they want you to message a specific worker: output JSON {{"action": "message_worker", "worker_name": "<first name or full name>", "message": "<what to say to the worker in your natural voice>"}}
+2. If they want you to do something you can't do (e.g. check a roster, approve something): output JSON {{"action": "cant_do", "reply": "<short reply acknowledging and explaining what you can't do>"}}
+3. If unclear or general: output JSON {{"action": "confirm", "reply": "<short confirmation or clarifying question>"}}
+
+JSON only."""
+
+    raw = _call_claude(prompt, max_tokens=300)
+    if not raw:
+        alert_cc_management("Got it — couldn't process that right now, try again in a sec.")
+        return
+
+    import re as _re
+    try:
+        clean = raw.strip()
+        if "```" in clean:
+            clean = _re.sub(r"```(?:json)?", "", clean).strip()
+        result = json.loads(clean)
+    except Exception:
+        alert_cc_management(f"Got your message — let me know if you need something specific.")
+        return
+
+    action = result.get("action", "")
+
+    if action == "message_worker":
+        worker_name = result.get("worker_name", "").strip()
+        msg_to_send = result.get("message", "").strip()
+        if not worker_name or not msg_to_send:
+            alert_cc_management("Got it — couldn't figure out which worker or what to say. Can you be more specific?")
+            return
+
+        # Look up user_id from worker name
+        worker_id = _find_worker_id_by_name(worker_name)
+        if not worker_id:
+            alert_cc_management(f"Can't find a worker called '{worker_name}' in Connecteam. Double-check the name?")
+            return
+
+        sent = _worker_send(worker_id, msg_to_send)
+        if sent:
+            append_to_conversation(worker_id, "amy", msg_to_send)
+            alert_cc_management(f"Done — sent {worker_name}: \"{msg_to_send[:120]}\"")
+        else:
+            alert_cc_management(f"Tried to message {worker_name} but it didn't go through — might be quiet hours or a chat issue.")
+
+    elif action in ("cant_do", "confirm"):
+        reply = result.get("reply", "")
+        if reply:
+            alert_cc_management(reply)
+
+
+def _find_worker_id_by_name(name):
+    """Look up a worker's user_id by partial name match in Connecteam."""
+    name_lower = name.lower().strip()
+    data = ct_get("/users/v1/users", {"limit": 100})
+    users = (data.get("data") or {}).get("users") or []
+    # Exact first name match first, then partial
+    for user in users:
+        full = (user.get("displayName") or "").lower()
+        if name_lower == full or full.startswith(name_lower):
+            return user.get("id")
+    for user in users:
+        full = (user.get("displayName") or "").lower()
+        if name_lower in full:
+            return user.get("id")
+    return None
 
 
 def _post_to_cc_mgmt(relay):
@@ -1010,8 +1114,8 @@ def _run_5pm_deadline_check():
         f"5 PM deadline: {len(names)} worker(s) still haven't responded — "
         f"{', '.join(names)}. Consider calling them directly."
     )
-    send_msg(MANAGER_NUMBER, msg)
-    print(f"[5PM] Manager alerted about: {', '.join(names)}")
+    alert_cc_management(msg)
+    print(f"[5PM] CC Management alerted about: {', '.join(names)}")
 
 
 def _check_recently_ended_shifts():

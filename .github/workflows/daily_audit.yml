@@ -35,10 +35,9 @@ jobs:
           CONNECTEAM_API_KEY:   ${{ secrets.CONNECTEAM_API_KEY }}
           CONNECTEAM_SENDER_ID: ${{ secrets.CONNECTEAM_SENDER_ID }}
           ANTHROPIC_API_KEY:    ${{ secrets.ANTHROPIC_API_KEY }}
-          TWILIO_ACCOUNT_SID:   ${{ secrets.TWILIO_ACCOUNT_SID }}
-          TWILIO_AUTH_TOKEN:    ${{ secrets.TWILIO_AUTH_TOKEN }}
-          TWILIO_NUMBER:        ${{ secrets.TWILIO_NUMBER }}
-          MANAGER_NUMBER:       ${{ secrets.MANAGER_NUMBER }}
+          CC_MGMT_CONV_ID:      ${{ secrets.CC_MGMT_CONV_ID }}
+          GITHUB_TOKEN:         ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPO:          ${{ github.repository }}
         run: python daily_notify.py
 
       - name: Commit updated notifications log

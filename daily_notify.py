@@ -10,19 +10,39 @@ Run manually:
     python daily_notify.py
 """
 
-import os, sys, json, datetime, uuid
+import os, sys, json, datetime, uuid, requests
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from connecteam_audit import (
     run_audit, fetch_all_users,
     lock_worker_days, add_worker_note, push_daily_info_note,
-    send_worker_message, send_sms,
-    CONNECTEAM_SENDER_ID, TWILIO_FROM_NUMBER,
+    send_worker_message,
+    CONNECTEAM_SENDER_ID, CONNECTEAM_API_KEY,
     AEST,
 )
 
 NOTIFICATIONS_FILE = os.path.join(os.path.dirname(__file__), "notifications_log.json")
-MANAGER_NUMBER     = os.environ.get("MANAGER_NUMBER", "")
+CC_MGMT_CONV_ID    = os.environ.get("CC_MGMT_CONV_ID", "4a14c09d-bc9f-46f2-9ad9-a728d6ddcbf6")
+BASE_URL           = "https://api.connecteam.com"
+
+
+def post_to_cc_management(text):
+    """Post a message to CC Management group chat (replaces SMS to manager)."""
+    sender_id = int(CONNECTEAM_SENDER_ID or "0")
+    if not sender_id or not CONNECTEAM_API_KEY:
+        print(f"  [DRY RUN] Would post to CC Management: {text[:120]}")
+        return False
+    try:
+        r = requests.post(
+            f"{BASE_URL}/chat/v1/conversations/{CC_MGMT_CONV_ID}/message",
+            headers={"X-API-KEY": CONNECTEAM_API_KEY, "Content-Type": "application/json"},
+            json={"senderId": sender_id, "text": text[:4000]},
+            timeout=15,
+        )
+        return r.ok
+    except Exception as e:
+        print(f"  [ERROR] CC Management post failed: {e}")
+        return False
 NOTIFY_SEVERITIES  = {"CRITICAL", "HIGH"}
 CRED_CATEGORIES    = {"EXPIRED CREDENTIAL", "CREDENTIAL EXPIRING SOON"}
 
@@ -348,15 +368,21 @@ def main():
     if sent_err: print(f"  Failed: {', '.join(sent_err)}")
     print(f"{'='*60}\n")
 
-    # Manager SMS summary
-    if MANAGER_NUMBER and sent_ok:
-        summary = (
-            f"Connect Care daily audit complete.\n"
-            f"{len(sent_ok)} workers notified, {len(sent_err)} failed.\n"
-            f"Workers: {', '.join(sent_ok)}"
+    # Post audit summary to CC Management
+    if sent_ok:
+        crit_count = sum(
+            1 for e in log
+            if e.get("audit_date") == audit_date
+            and (e.get("severity_counts") or {}).get("CRITICAL", 0) > 0
         )
-        send_sms(MANAGER_NUMBER, summary)
-        print(f"Manager summary sent to {MANAGER_NUMBER}")
+        summary = (
+            f"Daily audit done — {len(sent_ok)} worker(s) notified"
+            + (f", {len(sent_err)} failed" if sent_err else "")
+            + (f". {crit_count} with CRITICAL issues." if crit_count else ".")
+            + f"\nWorkers: {', '.join(sent_ok)}"
+            + f"\nNoon check will follow up on anyone who hasn't replied by 12 PM."
+        )
+        post_to_cc_management(summary)
 
     # ── Lock time entries for days > 2 days ago ───────────────────────────
     _lock_prior_days(contacts, now)
