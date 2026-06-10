@@ -992,6 +992,24 @@ Write a casual, natural follow-up text message. Sound like a real person — not
     return result or f"Hey {first_name}, just a quick one — {issues_desc} for {client_name}. Can you jump on that?"
 
 
+# ── Event log ring buffer (last 30 events for /debug endpoint) ────────────────
+
+_EVENT_LOG: list = []
+_EVENT_LOG_LOCK = threading.Lock()
+
+def _log_event(event, data, raw_body=None):
+    """Store a snapshot in the ring buffer; cap at 30 entries."""
+    entry = {
+        "ts":    datetime.datetime.now(AEST).strftime("%d %b %Y %I:%M:%S %p"),
+        "event": event,
+        "keys":  list(data.keys()) if isinstance(data, dict) else [],
+        "data":  {k: str(v)[:200] for k, v in (data.items() if isinstance(data, dict) else {})},
+    }
+    with _EVENT_LOG_LOCK:
+        _EVENT_LOG.insert(0, entry)
+        del _EVENT_LOG[30:]
+
+
 # ── HTTP Server ───────────────────────────────────────────────────────────────
 
 class WebhookHandler(BaseHTTPRequestHandler):
@@ -999,6 +1017,29 @@ class WebhookHandler(BaseHTTPRequestHandler):
         print(f"[{self.address_string()}] {format % args}")
 
     def do_GET(self):
+        path = self.path.split("?")[0]
+        if path == "/debug":
+            body = json.dumps(_EVENT_LOG, indent=2).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if path == "/status":
+            status = {
+                "sender_id":    SENDER_ID,
+                "amy_ids":      list(AMY_SENDER_IDS),
+                "ct_key_set":   bool(CT_KEY),
+                "ai_key_set":   bool(ANTHROPIC_API_KEY),
+                "relay_queue":  len(PENDING_RELAY_QUEUE),
+                "uptime":       datetime.datetime.now(AEST).isoformat(),
+            }
+            body = json.dumps(status, indent=2).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(body)
+            return
         self.send_response(200)
         self.end_headers()
         self.wfile.write(b"Connect Care webhook receiver - running.")
@@ -1024,7 +1065,8 @@ class WebhookHandler(BaseHTTPRequestHandler):
 
         event = payload.get("eventType", "")
         data  = payload.get("data", {})
-        print(f"Event: {event}")
+        _log_event(event, data)
+        print(f"Event: {event}  keys={list(data.keys()) if isinstance(data, dict) else '?'}")
 
         if event in ("timeActivityClockIn", "Time activity clock in"):
             handle_clock_in(data)
