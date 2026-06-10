@@ -1205,15 +1205,33 @@ def _run_shift_end_check(user_id, job_id, sched_end_ts, shift):
     Returns True if the check completed (message sent or all-clear), None if the
     Connecteam API was unreachable (so the caller can skip burning the dedup key).
     """
-    worker_name = get_worker_name(user_id)
-    client_name = get_job_name(job_id) if job_id else "your client"
-    first       = worker_name.split()[0]
-    end_dt      = datetime.datetime.fromtimestamp(sched_end_ts, tz=AEST)
-    today       = end_dt.strftime("%Y-%m-%d")
+    worker_name  = get_worker_name(user_id)
+    client_name  = get_job_name(job_id) if job_id else "your client"
+    first        = worker_name.split()[0]
+    end_dt       = datetime.datetime.fromtimestamp(sched_end_ts, tz=AEST)
 
-    data    = ct_get(f"/time-clock/v1/time-clocks/{TIME_CLOCK_ID}/time-activities",
-                     {"startDate": today, "endDate": today})
-    by_user = (data.get("data") or {}).get("timeActivitiesByUsers") or []
+    # Use the actual scheduled start time from the shift record so overnight shifts
+    # are described correctly (e.g. "9 PM last night" not "9 AM this morning").
+    sched_start_ts = shift.get("startTime") if isinstance(shift, dict) else None
+    if sched_start_ts:
+        start_dt   = datetime.datetime.fromtimestamp(sched_start_ts, tz=AEST)
+        start_str  = start_dt.strftime("%I:%M %p").lstrip("0")
+        end_str    = end_dt.strftime("%I:%M %p").lstrip("0")
+        # Overnight: start and end on different calendar days
+        if start_dt.date() != end_dt.date():
+            shift_label = f"overnight shift ({start_str} – {end_str})"
+        else:
+            shift_label = f"{start_str} shift"
+    else:
+        start_dt    = None
+        shift_label = f"{end_dt.strftime('%I:%M %p').lstrip('0')} shift"
+
+    # Search time activities across both the start date and end date (covers overnight)
+    start_date = (start_dt.strftime("%Y-%m-%d") if start_dt else end_dt.strftime("%Y-%m-%d"))
+    end_date   = end_dt.strftime("%Y-%m-%d")
+    data       = ct_get(f"/time-clock/v1/time-clocks/{TIME_CLOCK_ID}/time-activities",
+                        {"startDate": start_date, "endDate": end_date})
+    by_user    = (data.get("data") or {}).get("timeActivitiesByUsers") or []
 
     # If we got an empty dict back (API error), don't burn the dedup key
     if not data:
@@ -1224,21 +1242,22 @@ def _run_shift_end_check(user_id, job_id, sched_end_ts, shift):
     for entry in by_user:
         if str(entry.get("userId")) == str(user_id):
             all_shifts = entry.get("shifts") or []
-            # Match the shift closest to the scheduled start (sched_end - shift_duration)
-            if all_shifts:
+            if all_shifts and sched_start_ts:
+                # Match the clock-in closest to the scheduled start time
                 activity = min(all_shifts,
-                               key=lambda s: abs((s.get("start") or {}).get("timestamp", 0)
-                                                 - (sched_end_ts - 6 * 3600)))
+                               key=lambda s: abs((s.get("start") or {}).get("timestamp", 0) - sched_start_ts))
+            elif all_shifts:
+                activity = all_shifts[-1]
             break
 
     flags = []
 
     if not activity:
-        flags.append(f"no clock-in found for your {end_dt.strftime('%I:%M %p').lstrip('0')} shift at {client_name}")
+        flags.append(f"no clock-in found for your {shift_label} at {client_name}")
     else:
         clock_out = (activity.get("end") or {}).get("timestamp")
         if not clock_out:
-            flags.append(f"still clocked in at {client_name} — shift was scheduled to finish at {end_dt.strftime('%I:%M %p').lstrip('0')}")
+            flags.append(f"still clocked in at {client_name} — {shift_label} was scheduled to finish at {end_dt.strftime('%I:%M %p').lstrip('0')}")
 
         atts  = activity.get("shiftAttachments") or []
         note  = get_note_text(atts)
