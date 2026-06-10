@@ -713,7 +713,11 @@ Important: sound like a real person texting, not a corporate system. No buzzword
         return False, f"Thanks {first}, noted — I'll follow up if anything else is needed."
     try:
         result = json.loads(raw)
-        return result.get("is_complex", False), result.get("reply", "")
+        reply = result.get("reply") or ""
+        if not reply:
+            # Claude returned valid JSON but omitted the reply — use a safe fallback
+            return False, f"Thanks {first}, noted — I'll be in touch."
+        return result.get("is_complex", False), reply
     except Exception:
         return False, f"Thanks {first}, noted."
 
@@ -760,6 +764,7 @@ def handle_chat_reply(data):
     text    = (data.get("text") or "").strip()
     conv_id = str(data.get("conversationId") or data.get("channelId") or "")
     if not user_id or not text:
+        print(f"  [chat] skipped — userId={user_id!r} text={text[:40]!r} keys={list(data.keys())}")
         return
 
     uid = int(user_id)
