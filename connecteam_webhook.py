@@ -1090,20 +1090,104 @@ def handle_form_submitted(data):
     print(f"  Form {form_id} submitted by {worker}")
 
 
-# ── Shift-end compliance checker (background thread) ─────────────────────────
+# ── Shift-end compliance scheduler ───────────────────────────────────────────
+# Shift times are fixed on the roster, so instead of polling every 10 minutes
+# we fetch the schedule once at startup (and again at midnight for the next day)
+# and set a precise threading.Timer for each shift: fires 30 min after shift end.
 
-SCHEDULER_ID    = 1775479
+SCHEDULER_ID = 1775479
+_SCHEDULED_SHIFTS: set = set()   # shift IDs already scheduled, prevents duplicates
+_SCHEDULED_LOCK = threading.Lock()
 
 
-def _shift_check_loop():
-    """Poll every 10 min for shifts that ended 25-90 min ago and haven't been checked."""
-    time.sleep(15)  # brief startup delay
-    while True:
+def _schedule_all_shifts():
+    """
+    Fetch today's (and tomorrow's) shifts and set a timer for each one.
+    Safe to call multiple times — already-scheduled shifts are skipped.
+    """
+    if not CT_KEY:
+        return
+    aest_now = datetime.datetime.now(AEST)
+    # Cover the next 36 hours so we pick up overnight and early-morning shifts
+    window_start = int(aest_now.timestamp())
+    window_end   = int((aest_now + datetime.timedelta(hours=36)).timestamp())
+
+    try:
+        r = requests.get(
+            f"{BASE_URL}/scheduler/v1/schedulers/{SCHEDULER_ID}/shifts",
+            headers={"X-API-KEY": CT_KEY},
+            params={"startTime": window_start, "endTime": window_end, "limit": 200},
+            timeout=15,
+        )
+        if not r.ok:
+            print(f"[scheduler] failed to fetch shifts: {r.status_code}")
+            return
+        shifts = (r.json().get("data") or {}).get("shifts") or []
+    except Exception as e:
+        print(f"[scheduler] error fetching shifts: {e}")
+        return
+
+    scheduled = 0
+    for shift in shifts:
+        shift_id = shift.get("id", "")
+        end_ts   = shift.get("endTime", 0)
+        if not shift_id or not end_ts:
+            continue
+        with _SCHEDULED_LOCK:
+            if shift_id in _SCHEDULED_SHIFTS:
+                continue
+            _SCHEDULED_SHIFTS.add(shift_id)
+
+        fire_at  = end_ts + 30 * 60          # 30 minutes after scheduled end
+        delay    = fire_at - time.time()
+        if delay < 0:
+            # Shift already ended — check immediately (catches past-missed shifts on startup)
+            delay = 2
+        t = threading.Timer(delay, _fire_shift_check, args=(shift,))
+        t.daemon = True
+        t.start()
+        scheduled += 1
+
+    if scheduled:
+        print(f"[scheduler] {scheduled} shift timer(s) set")
+
+
+def _fire_shift_check(shift):
+    """Called by timer 30 min after a shift's scheduled end time."""
+    end_ts   = shift.get("endTime", 0)
+    shift_id = shift.get("id", "")
+    job_id   = shift.get("jobId")
+    assigned = shift.get("assignedUserIds") or []
+
+    notified = load_shift_notified()
+    for uid in assigned:
+        if uid in OBSERVER_IDS:
+            continue
+        key = f"{uid}_{shift_id}"
+        if key in notified:
+            continue
         try:
-            _check_recently_ended_shifts()
+            sent = _run_shift_end_check(uid, job_id, end_ts, shift)
+            if sent is not None:
+                notified = load_shift_notified()   # reload in case another thread wrote it
+                notified[key] = time.time()
+                save_shift_notified(notified)
         except Exception as e:
-            print(f"[shift-check] error: {e}")
-        time.sleep(600)
+            print(f"[shift-check] check failed for user {uid}: {e}")
+
+
+def _midnight_refresh_loop():
+    """Re-run _schedule_all_shifts each day at midnight to load the next day's roster."""
+    last_loaded = None
+    while True:
+        time.sleep(60)
+        today = datetime.datetime.now(AEST).strftime("%Y-%m-%d")
+        if today != last_loaded:
+            last_loaded = today
+            try:
+                _schedule_all_shifts()
+            except Exception as e:
+                print(f"[scheduler] midnight refresh error: {e}")
 
 
 def _deadline_check_loop():
@@ -1143,60 +1227,6 @@ def _run_5pm_deadline_check():
     print(f"[5PM] CC Management alerted about: {', '.join(names)}")
 
 
-def _check_recently_ended_shifts():
-    """
-    Check shifts that ended 25 min – 24 hours ago and haven't been checked yet.
-    The 25-minute minimum gives workers time to finish up and submit notes.
-    The 24-hour lookback ensures shifts that ended during quiet hours (after 7 PM)
-    get checked the next morning when the messaging window reopens.
-    """
-    if not CT_KEY:
-        return
-    now_ts   = time.time()
-    aest_now = datetime.datetime.now(AEST)
-    # Look back 24 hours so overnight quiet-hours shifts get picked up in the morning
-    window_start = int((aest_now - datetime.timedelta(hours=24)).timestamp())
-    window_end   = int(aest_now.timestamp())
-
-    r = requests.get(
-        f"{BASE_URL}/scheduler/v1/schedulers/{SCHEDULER_ID}/shifts",
-        headers={"X-API-KEY": CT_KEY},
-        params={"startTime": window_start, "endTime": window_end, "limit": 100},
-        timeout=15,
-    )
-    if not r.ok:
-        return
-
-    shifts = (r.json().get("data") or {}).get("shifts") or []
-
-    for shift in shifts:
-        end_ts   = shift.get("endTime", 0)
-        shift_id = shift.get("id", "")
-        age      = now_ts - end_ts
-
-        # Only act on shifts that ended at least 25 minutes ago
-        if age < 25 * 60:
-            continue
-
-        assigned = shift.get("assignedUserIds") or []
-        job_id   = shift.get("jobId")
-
-        notified = load_shift_notified()
-        for uid in assigned:
-            if uid in OBSERVER_IDS:
-                continue
-            key = f"{uid}_{shift_id}"
-            if key in notified:
-                continue
-            try:
-                sent = _run_shift_end_check(uid, job_id, end_ts, shift)
-                # Only burn the dedup key if the check actually ran (sent or all-clear).
-                # If the API was down and nothing happened, leave key unburned so we retry.
-                if sent is not None:
-                    notified[key] = time.time()
-                    save_shift_notified(notified)
-            except Exception as e:
-                print(f"[shift-check] check failed for user {uid}: {e}")
 
 
 def _run_shift_end_check(user_id, job_id, sched_end_ts, shift):
@@ -1235,7 +1265,7 @@ def _run_shift_end_check(user_id, job_id, sched_end_ts, shift):
 
     # If we got an empty dict back (API error), don't burn the dedup key
     if not data:
-        print(f"[shift-check] API error fetching time-activities — will retry next poll")
+        print(f"[shift-check] API error fetching time-activities for {worker_name} — skipping")
         return None
 
     activity = None
@@ -1424,8 +1454,11 @@ class WebhookHandler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     print(f"Starting Connect Care webhook receiver on port {PORT}...")
-    threading.Thread(target=_shift_check_loop, daemon=True).start()
-    print("Shift-end compliance checker started (polls every 10 min).")
+    # Load today's roster and set a timer for each shift (fires 30 min after shift end)
+    _schedule_all_shifts()
+    # Refresh at midnight to load the next day's shifts
+    threading.Thread(target=_midnight_refresh_loop, daemon=True).start()
+    print("Shift-end compliance scheduler started.")
     threading.Thread(target=_deadline_check_loop, daemon=True).start()
     print("5 PM deadline checker started.")
     server = HTTPServer(("0.0.0.0", PORT), WebhookHandler)
