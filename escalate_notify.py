@@ -65,6 +65,7 @@ def main():
     pending = [
         e for e in log
         if e.get("status") == "Sent"
+        and not e.get("acknowledged_at")  # skip if already acknowledged (race guard)
         and (e.get("audit_date") == today or e.get("sent_at_iso", "").startswith(today))
         and not e.get("dry_run")
     ]
