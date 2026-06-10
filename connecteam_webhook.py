@@ -284,15 +284,40 @@ def ct_get(path, params=None):
         return {}
 
 
+_USER_CACHE: dict = {}
+
+
+def _fetch_user(user_id):
+    """Fetch a single user record, with in-memory cache. Falls back to list endpoint."""
+    uid = str(user_id)
+    if uid in _USER_CACHE:
+        return _USER_CACHE[uid]
+    # Try individual endpoint first
+    data = ct_get(f"/users/v1/users/{uid}")
+    u = (data.get("data") or {}).get("user") or {}
+    if u.get("firstName") or u.get("displayName"):
+        _USER_CACHE[uid] = u
+        return u
+    # Individual endpoint returned 405/empty — scan the list
+    list_data = ct_get("/users/v1/users", {"limit": 200})
+    users = (list_data.get("data") or {}).get("users") or []
+    for user in users:
+        _USER_CACHE[str(user.get("id") or user.get("userId", ""))] = user
+    u = _USER_CACHE.get(uid, {})
+    return u
+
+
 def get_worker_name(user_id):
-    data = ct_get(f"/users/v1/users/{user_id}")
-    u    = (data.get("data") or {}).get("user") or data
-    return f"{u.get('firstName','')} {u.get('lastName','')}".strip() or f"Worker {user_id}"
+    u = _fetch_user(user_id)
+    return (
+        u.get("displayName")
+        or f"{u.get('firstName','')} {u.get('lastName','')}".strip()
+        or f"Worker {user_id}"
+    )
 
 
 def get_worker_phone(user_id):
-    data = ct_get(f"/users/v1/users/{user_id}")
-    u    = (data.get("data") or {}).get("user") or data
+    u = _fetch_user(user_id)
     return u.get("phoneNumber") or u.get("phone") or ""
 
 
