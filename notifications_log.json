@@ -21,12 +21,13 @@
     ],
     "message_sent": "Hi Abdul,\n\nFrom your shift yesterday (Tue 09 Jun) \u2014 I need you to sort these out by 5 PM today:\n\n\ud83d\udfe0 Medication Incident Form \u2014 Entry #17 -- 30h between incident and report. If this was a serious incident, the 24h N\u2026\n\nReply and let me know what happened and what you've done to fix it \u2014 need to hear back by 5 PM.\n\nCheers",
     "channel": "connecteam",
-    "status": "Sent",
+    "status": "Escalated",
     "acknowledged_at": null,
     "resolved_at": null,
     "manager_notes": "",
     "automated": true,
-    "dry_run": false
+    "dry_run": false,
+    "escalated_at": "10 Jun 2026, 06:44 PM"
   },
   {
     "id": "761a98e2",
@@ -71,12 +72,13 @@
     ],
     "message_sent": "Hi Ali,\n\nFrom your shift yesterday (Tue 09 Jun) \u2014 I need you to sort these out by 5 PM today:\n\n\ud83d\udfe0 Kallan Jordan \u2014 Clocked in 5.2km from client's address (allowed radius: 0.50km \u00b7 location: Metropolitan\u2026\n\ud83d\udfe0 Kallan Incident Report \u2014 Entry #332 -- 26h between incident and report. If this was a serious incident, the 24h \u2026\n\ud83d\udfe0 Kallan Jordan \u2014 Expected 2:1 ratio -- only 1 worker(s) clocked in for 09:00\u201315:00.\n\ud83d\udfe0 Kallan Jordan \u2014 Expected 2:1 ratio -- only 1 worker(s) clocked in for 09:00\u201315:00.\n\nReply and let me know what happened and what you've done to fix it \u2014 need to hear back by 5 PM.\n\nCheers",
     "channel": "connecteam",
-    "status": "Sent",
+    "status": "Escalated",
     "acknowledged_at": null,
     "resolved_at": null,
     "manager_notes": "",
     "automated": true,
-    "dry_run": false
+    "dry_run": false,
+    "escalated_at": "10 Jun 2026, 06:44 PM"
   },
   {
     "id": "7d237238",
@@ -107,12 +109,13 @@
     ],
     "message_sent": "Hi Hajar,\n\nFrom your shift yesterday (Tue 09 Jun) \u2014 I need you to sort these out by 5 PM today:\n\n\ud83d\udfe0 Nicole Loveless \u2014 Note does not meet NDIS progress note requirements. Issues: Note is incomplete - cuts o\u2026\n\ud83d\udfe0 Nicole Loveless \u2014 Note is incoherent, contradictory, or contains nonsensical content.\n\nReply and let me know what happened and what you've done to fix it \u2014 need to hear back by 5 PM.\n\nCheers",
     "channel": "connecteam",
-    "status": "Sent",
+    "status": "Escalated",
     "acknowledged_at": null,
     "resolved_at": null,
     "manager_notes": "",
     "automated": true,
-    "dry_run": false
+    "dry_run": false,
+    "escalated_at": "10 Jun 2026, 06:44 PM"
   },
   {
     "id": "c903b3b9",
@@ -172,12 +175,13 @@
     ],
     "message_sent": "Hi Roja,\n\nFrom your shift yesterday (Tue 09 Jun) \u2014 I need you to sort these out by 5 PM today:\n\n\ud83d\udd34 Kallan Jordan \u2014 Rostered 15:00\u201321:00 -- never clocked in.\n\ud83d\udfe0 Kallan Jordan \u2014 System force-closed shift at 21:10. Worker failed to clock out manually.\n\ud83d\udfe0 Kallan Jordan \u2014 Clocked in 2.0km from client's address (allowed radius: 0.50km \u00b7 location: Cameron Pde,\u2026\n\ud83d\udfe0 Evan Gatt \u2014 No shift note fields submitted at all.\n\ud83d\udfe0 Kallan Jordan \u2014 No shift note fields submitted at all.\n\ud83d\udfe0 Kallan Jordan \u2014 Expected 2:1 ratio -- only 1 worker(s) clocked in for 15:00\u201321:00.\n\nReply and let me know what happened and what you've done to fix it \u2014 need to hear back by 5 PM.\n\nCheers",
     "channel": "connecteam",
-    "status": "Sent",
+    "status": "Escalated",
     "acknowledged_at": null,
     "resolved_at": null,
     "manager_notes": "",
     "automated": true,
-    "dry_run": false
+    "dry_run": false,
+    "escalated_at": "10 Jun 2026, 06:44 PM"
   },
   {
     "id": "ef5616cd",
@@ -201,12 +205,13 @@
     ],
     "message_sent": "Hi Abdi,\n\nFrom your shift yesterday (Tue 09 Jun) \u2014 I need you to sort these out by 5 PM today:\n\n\ud83d\udd34 John Auzagelis \u2014 Rostered 09:00\u201314:00 -- never clocked in.\n\nReply and let me know what happened and what you've done to fix it \u2014 need to hear back by 5 PM.\n\nCheers",
     "channel": "connecteam",
-    "status": "Sent",
+    "status": "Escalated",
     "acknowledged_at": null,
     "resolved_at": null,
     "manager_notes": "",
     "automated": true,
-    "dry_run": false
+    "dry_run": false,
+    "escalated_at": "10 Jun 2026, 06:44 PM"
   },
   {
     "id": "33e88010",
@@ -252,12 +257,13 @@
     ],
     "message_sent": "Hi Peter,\n\nFrom your shift yesterday (Tue 09 Jun) \u2014 I need you to sort these out by 5 PM today:\n\n\ud83d\udd34 Joshua Gatt \u2014 214 min late -- scheduled 09:00, arrived 12:34.\n\ud83d\udfe0 Joshua Gatt \u2014 Left 73 min early -- scheduled until 14:00, left at 12:47.\n\ud83d\udfe0 Joshua Gatt \u2014 Clocked in 13.3km from client's address (allowed radius: 0.50km \u00b7 location: Harvest Ct,\u2026\n\ud83d\udfe0 Joshua Gatt \u2014 Shift lasted only 13 min (12:34\u201312:47) -- possible clock error or fraudulent entry.\n\nReply and let me know what happened and what you've done to fix it \u2014 need to hear back by 5 PM.\n\nCheers",
     "channel": "connecteam",
-    "status": "Sent",
+    "status": "Escalated",
     "acknowledged_at": null,
     "resolved_at": null,
     "manager_notes": "",
     "automated": true,
-    "dry_run": false
+    "dry_run": false,
+    "escalated_at": "10 Jun 2026, 06:44 PM"
   },
   {
     "id": "8ea804b2",
@@ -324,12 +330,13 @@
     ],
     "message_sent": "Hi Mohamed,\n\nFrom your shift yesterday (Tue 09 Jun) \u2014 I need you to sort these out by 5 PM today:\n\n\ud83d\udd34 Kallan Jordan \u2014 Left 606 min early -- scheduled until 09:00, left at 22:54.\n\ud83d\udd34 Kallan Incident Report \u2014 Entry #330 -- occurred Fri 29-May 09:30, reported 11.2 days later. NDIS requires seriou\u2026\n\ud83d\udfe0 Kallan Jordan \u2014 System force-closed shift at 22:54. Worker failed to clock out manually.\n\ud83d\udfe0 Kallan Jordan \u2014 Left 90 min early -- scheduled until 15:00, left at 13:29.\n\ud83d\udfe0 Kallan Jordan \u2014 No shift note fields submitted at all.\n\ud83d\udfe0 Kallan Jordan \u2014 Expected 2:1 ratio -- only 1 worker(s) clocked in for 15:00\u201321:00.\n\ud83d\udfe0 Kallan Jordan \u2014 Expected 2:1 ratio -- only 1 worker(s) clocked in for 09:00\u201315:00.\n\nReply and let me know what happened and what you've done to fix it \u2014 need to hear back by 5 PM.\n\nCheers",
     "channel": "connecteam",
-    "status": "Sent",
+    "status": "Escalated",
     "acknowledged_at": null,
     "resolved_at": null,
     "manager_notes": "",
     "automated": true,
-    "dry_run": false
+    "dry_run": false,
+    "escalated_at": "10 Jun 2026, 06:44 PM"
   },
   {
     "id": "bbffbc3a",
@@ -353,12 +360,13 @@
     ],
     "message_sent": "Hi Abdul,\n\nFrom your shift yesterday (Tue 09 Jun) \u2014 I need you to sort these out by 5 PM today:\n\n\ud83d\udfe0 Medication Incident Form \u2014 Entry #17 -- 30h between incident and report. If this was a serious incident, the 24h N\u2026\n\nReply and let me know what happened and what you've done to fix it \u2014 need to hear back by 5 PM.\n\nCheers",
     "channel": "connecteam",
-    "status": "Sent",
+    "status": "Escalated",
     "acknowledged_at": null,
     "resolved_at": null,
     "manager_notes": "",
     "automated": true,
-    "dry_run": false
+    "dry_run": false,
+    "escalated_at": "10 Jun 2026, 06:44 PM"
   },
   {
     "id": "43fe11cf",
@@ -389,12 +397,13 @@
     ],
     "message_sent": "Hi Hajar,\n\nFrom your shift yesterday (Tue 09 Jun) \u2014 I need you to sort these out by 5 PM today:\n\n\ud83d\udfe0 Nicole Loveless \u2014 Note does not meet NDIS progress note requirements. Issues: Note is incomplete - cuts o\u2026\n\ud83d\udfe0 Nicole Loveless \u2014 Note is incoherent, contradictory, or contains nonsensical content.\n\nReply and let me know what happened and what you've done to fix it \u2014 need to hear back by 5 PM.\n\nCheers",
     "channel": "connecteam",
-    "status": "Sent",
+    "status": "Escalated",
     "acknowledged_at": null,
     "resolved_at": null,
     "manager_notes": "",
     "automated": true,
-    "dry_run": false
+    "dry_run": false,
+    "escalated_at": "10 Jun 2026, 06:44 PM"
   },
   {
     "id": "00e62b87",
@@ -454,12 +463,13 @@
     ],
     "message_sent": "Hi Roja,\n\nFrom your shift yesterday (Tue 09 Jun) \u2014 I need you to sort these out by 5 PM today:\n\n\ud83d\udd34 Kallan Jordan \u2014 Rostered 15:00\u201321:00 -- never clocked in.\n\ud83d\udfe0 Kallan Jordan \u2014 System force-closed shift at 21:10. Worker failed to clock out manually.\n\ud83d\udfe0 Kallan Jordan \u2014 Clocked in 2.0km from client's address (allowed radius: 0.50km \u00b7 location: Cameron Pde,\u2026\n\ud83d\udfe0 Evan Gatt \u2014 No shift note fields submitted at all.\n\ud83d\udfe0 Kallan Jordan \u2014 No shift note fields submitted at all.\n\ud83d\udfe0 Kallan Jordan \u2014 Expected 2:1 ratio -- only 1 worker(s) clocked in for 15:00\u201321:00.\n\nReply and let me know what happened and what you've done to fix it \u2014 need to hear back by 5 PM.\n\nCheers",
     "channel": "connecteam",
-    "status": "Sent",
+    "status": "Escalated",
     "acknowledged_at": null,
     "resolved_at": null,
     "manager_notes": "",
     "automated": true,
-    "dry_run": false
+    "dry_run": false,
+    "escalated_at": "10 Jun 2026, 06:44 PM"
   },
   {
     "id": "0d3dc167",
@@ -505,12 +515,13 @@
     ],
     "message_sent": "Hi Ali,\n\nFrom your shift yesterday (Tue 09 Jun) \u2014 I need you to sort these out by 5 PM today:\n\n\ud83d\udd34 Kallan Jordan \u2014 Rostered 09:00\u201315:00 -- never clocked in.\n\ud83d\udfe0 Kallan Jordan \u2014 Clocked in 5.2km from client's address (allowed radius: 0.50km \u00b7 location: Metropolitan\u2026\n\ud83d\udfe0 Kallan Incident Report \u2014 Entry #332 -- 26h between incident and report. If this was a serious incident, the 24h \u2026\n\ud83d\udfe0 Kallan Jordan \u2014 Expected 2:1 ratio -- only 1 worker(s) clocked in for 09:00\u201315:00.\n\nReply and let me know what happened and what you've done to fix it \u2014 need to hear back by 5 PM.\n\nCheers",
     "channel": "connecteam",
-    "status": "Sent",
+    "status": "Escalated",
     "acknowledged_at": null,
     "resolved_at": null,
     "manager_notes": "",
     "automated": true,
-    "dry_run": false
+    "dry_run": false,
+    "escalated_at": "10 Jun 2026, 06:44 PM"
   },
   {
     "id": "f424b4e3",
@@ -534,12 +545,13 @@
     ],
     "message_sent": "Hi Abdi,\n\nFrom your shift yesterday (Tue 09 Jun) \u2014 I need you to sort these out by 5 PM today:\n\n\ud83d\udd34 John Auzagelis \u2014 Rostered 09:00\u201314:00 -- never clocked in.\n\nReply and let me know what happened and what you've done to fix it \u2014 need to hear back by 5 PM.\n\nCheers",
     "channel": "connecteam",
-    "status": "Sent",
+    "status": "Escalated",
     "acknowledged_at": null,
     "resolved_at": null,
     "manager_notes": "",
     "automated": true,
-    "dry_run": false
+    "dry_run": false,
+    "escalated_at": "10 Jun 2026, 06:44 PM"
   },
   {
     "id": "49e5ff83",
@@ -592,12 +604,13 @@
     ],
     "message_sent": "Hi Peter,\n\nFrom your shift yesterday (Tue 09 Jun) \u2014 I need you to sort these out by 5 PM today:\n\n\ud83d\udd34 Joshua Gatt \u2014 214 min late -- scheduled 09:00, arrived 12:34.\n\ud83d\udfe0 Joshua Gatt \u2014 Left 73 min early -- scheduled until 14:00, left at 12:47.\n\ud83d\udfe0 Joshua Gatt \u2014 Note does not meet NDIS progress note requirements. Issues: No supports were actually p\u2026\n\ud83d\udfe0 Joshua Gatt \u2014 Clocked in 13.3km from client's address (allowed radius: 0.50km \u00b7 location: Harvest Ct,\u2026\n\ud83d\udfe0 Joshua Gatt \u2014 Shift lasted only 13 min (12:34\u201312:47) -- possible clock error or fraudulent entry.\n\nReply and let me know what happened and what you've done to fix it \u2014 need to hear back by 5 PM.\n\nCheers",
     "channel": "connecteam",
-    "status": "Sent",
+    "status": "Escalated",
     "acknowledged_at": null,
     "resolved_at": null,
     "manager_notes": "",
     "automated": true,
-    "dry_run": false
+    "dry_run": false,
+    "escalated_at": "10 Jun 2026, 06:44 PM"
   },
   {
     "id": "6e1b0b9a",
@@ -664,12 +677,13 @@
     ],
     "message_sent": "Hi Mohamed,\n\nFrom your shift yesterday (Tue 09 Jun) \u2014 I need you to sort these out by 5 PM today:\n\n\ud83d\udd34 Kallan Jordan \u2014 Left 606 min early -- scheduled until 09:00, left at 22:54.\n\ud83d\udd34 Kallan Incident Report \u2014 Entry #330 -- occurred Fri 29-May 09:30, reported 11.2 days later. NDIS requires seriou\u2026\n\ud83d\udfe0 Kallan Jordan \u2014 System force-closed shift at 22:54. Worker failed to clock out manually.\n\ud83d\udfe0 Kallan Jordan \u2014 Left 90 min early -- scheduled until 15:00, left at 13:29.\n\ud83d\udfe0 Kallan Jordan \u2014 No shift note fields submitted at all.\n\ud83d\udfe0 Kallan Jordan \u2014 Expected 2:1 ratio -- only 1 worker(s) clocked in for 15:00\u201321:00.\n\ud83d\udfe0 Kallan Jordan \u2014 Expected 2:1 ratio -- only 1 worker(s) clocked in for 09:00\u201315:00.\n\nReply and let me know what happened and what you've done to fix it \u2014 need to hear back by 5 PM.\n\nCheers",
     "channel": "connecteam",
-    "status": "Sent",
+    "status": "Escalated",
     "acknowledged_at": null,
     "resolved_at": null,
     "manager_notes": "",
     "automated": true,
-    "dry_run": false
+    "dry_run": false,
+    "escalated_at": "10 Jun 2026, 06:44 PM"
   },
   {
     "id": "e1b533f9",
