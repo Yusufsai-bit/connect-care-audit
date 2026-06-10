@@ -48,8 +48,6 @@ WEBHOOK_SECRET     = os.environ.get("WEBHOOK_SECRET", "")
 PORT               = int(os.environ.get("PORT", "8080"))
 MANAGER_NUMBER     = os.environ.get("MANAGER_NUMBER", "+61431836771")
 OBSERVER_IDS       = {2149475, 9736871, 2201497}  # Yusuf, Nada, Faduma — keep in sync with audit.py
-AMY_SENDER_IDS     = {272153}  # Amy's chat sender account — ignore her own messages
-ALL_SYSTEM_IDS     = OBSERVER_IDS | AMY_SENDER_IDS  # never treat these as workers
 
 # Time clock constants (mirrors connecteam_audit.py)
 TIME_CLOCK_ID    = 1776332
@@ -70,6 +68,8 @@ CT_KEY            = os.environ.get("CONNECTEAM_API_KEY", "")
 BASE_URL          = "https://api.connecteam.com"
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 SENDER_ID         = int(os.environ.get("CONNECTEAM_SENDER_ID", "0") or "0")
+AMY_SENDER_IDS    = {SENDER_ID} if SENDER_ID else set()  # derived so it stays in sync with env
+ALL_SYSTEM_IDS    = OBSERVER_IDS | AMY_SENDER_IDS
 MANAGER_USER_ID   = 2149475  # Yusuf
 CC_MGMT_CONV_ID   = os.environ.get("CC_MGMT_CONV_ID", "4a14c09d-bc9f-46f2-9ad9-a728d6ddcbf6")
 
@@ -360,6 +360,7 @@ def send_connecteam_chat(user_id, text):
     """
     sender_id = int(os.environ.get("CONNECTEAM_SENDER_ID", "0") or "0")
     if not sender_id:
+        print("[WARN] CONNECTEAM_SENDER_ID not set — message not sent to worker")
         return False
 
     # Try group conversation first
@@ -786,7 +787,6 @@ def handle_chat_reply(data):
         return
 
     worker = get_worker_name(user_id) if CT_KEY else str(user_id)
-    mark_acknowledged(user_id)
     print(f"  Message from {worker}: '{text[:80]}'")
 
     # ── Verify any claims the worker is making ─────────────────────────────────
@@ -798,6 +798,11 @@ def handle_chat_reply(data):
     issues          = get_worker_issues(user_id)
     prior_msg       = get_last_amy_message(user_id)
     is_complex, amy_reply = generate_amy_reply(worker, text, issues, verification, prior_msg)
+
+    # Only acknowledge if the worker is actually responding to a compliance issue —
+    # not for unrelated messages like shift-swap requests (those get classified complex).
+    if not is_complex or verification:
+        mark_acknowledged(user_id)
 
     if amy_reply and SENDER_ID and CT_KEY:
         send_connecteam_chat(user_id, amy_reply)
@@ -829,7 +834,10 @@ def _post_to_cc_mgmt(relay):
         f"Their open issues:\n{issues_summary}\n\n"
         f"What should Amy say back to {first}? Reply here with your guidance and Amy will compose and send the message."
     )
-    post_to_conversation(CC_MGMT_CONV_ID, msg)
+    ok = post_to_conversation(CC_MGMT_CONV_ID, msg)
+    if not ok:
+        print(f"[ERROR] Failed to post relay to CC Management (conv {CC_MGMT_CONV_ID}) — "
+              f"manager won't see {worker}'s message. Check CC_MGMT_CONV_ID env var.")
 
 
 def handle_form_submitted(data):
@@ -894,16 +902,23 @@ def _check_recently_ended_shifts():
             key = f"{uid}_{shift_id}"
             if key in notified:
                 continue
-            notified[key] = time.time()
-            save_shift_notified(notified)
             try:
-                _run_shift_end_check(uid, job_id, end_ts, shift)
+                sent = _run_shift_end_check(uid, job_id, end_ts, shift)
+                # Only burn the dedup key if the check actually ran (sent or all-clear).
+                # If the API was down and nothing happened, leave key unburned so we retry.
+                if sent is not None:
+                    notified[key] = time.time()
+                    save_shift_notified(notified)
             except Exception as e:
                 print(f"[shift-check] check failed for user {uid}: {e}")
 
 
 def _run_shift_end_check(user_id, job_id, sched_end_ts, shift):
-    """Check a single worker's shift compliance after it should have ended."""
+    """
+    Check a single worker's shift compliance after it should have ended.
+    Returns True if the check completed (message sent or all-clear), None if the
+    Connecteam API was unreachable (so the caller can skip burning the dedup key).
+    """
     worker_name = get_worker_name(user_id)
     client_name = get_job_name(job_id) if job_id else "your client"
     first       = worker_name.split()[0]
@@ -913,6 +928,11 @@ def _run_shift_end_check(user_id, job_id, sched_end_ts, shift):
     data    = ct_get(f"/time-clock/v1/time-clocks/{TIME_CLOCK_ID}/time-activities",
                      {"startDate": today, "endDate": today})
     by_user = (data.get("data") or {}).get("timeActivitiesByUsers") or []
+
+    # If we got an empty dict back (API error), don't burn the dedup key
+    if not data:
+        print(f"[shift-check] API error fetching time-activities — will retry next poll")
+        return None
 
     activity = None
     for entry in by_user:
@@ -941,13 +961,14 @@ def _run_shift_end_check(user_id, job_id, sched_end_ts, shift):
 
     if not flags:
         print(f"[shift-check] {worker_name} ({client_name}) all good")
-        return
+        return True
 
     msg = _generate_shift_end_msg(first, client_name, flags)
     sent = send_connecteam_chat(user_id, msg)
     if sent:
         set_last_amy_message(user_id, msg)
     print(f"[shift-check] notified {worker_name}: {flags}")
+    return True
 
 
 def _generate_shift_end_msg(first_name, client_name, flags):
