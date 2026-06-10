@@ -1132,6 +1132,8 @@ def run_audit(days_back=7):
                 )
 
             if not matched:
+                if sched_end > now.timestamp():
+                    continue  # shift hasn't ended yet — don't audit
                 shift_day = ts_aest(sched_start).strftime("%Y-%m-%d")
                 if shift_day in unavail_dates.get(uid, set()):
                     issues.append(Issue("LOW", "APPROVED LEAVE", name, client, dlabel,
@@ -1153,6 +1155,8 @@ def run_audit(days_back=7):
                     f"{late_min} min late -- scheduled {s_str}, arrived {ts_aest(clock_in).strftime('%H:%M')}."))
 
             if not clock_out:
+                if sched_end > now.timestamp():
+                    continue  # shift hasn't ended yet — don't audit
                 if now.timestamp() > sched_end + _clockout_grace_secs:
                     overdue_min = round((now.timestamp() - sched_end) / 60)
                     issues.append(Issue("HIGH", "MISSING CLOCK-OUT", name, client, dlabel,
