@@ -665,6 +665,10 @@ def verify_worker_claims(user_id, text):
     """
     If the worker claims to have done something, check Connecteam to see if it's true.
     Returns (plain-English verification string, is_resolved: bool).
+
+    Special case — pending approval items (time corrections, timesheet amendments):
+    These won't appear in the API until an admin approves them, so we can't verify them.
+    We flag them as "PENDING_APPROVAL" so Amy knows to acknowledge without marking resolved.
     """
     text_lower = text.lower()
     claim_keywords = ["submitted", "done", "updated", "fixed", "added", "sent", "completed",
@@ -672,6 +676,17 @@ def verify_worker_claims(user_id, text):
                       "clocked", "clock out", "clocked out", "clocking out"]
     if not any(w in text_lower for w in claim_keywords):
         return "", False
+
+    # Time corrections / timesheet amendments are PENDING APPROVAL in Connecteam —
+    # they don't appear in the time-activities API until an admin approves them.
+    # Don't try to verify; route to manager instead.
+    approval_keywords = [
+        "correction", "amendment", "amended", "corrected", "adjust", "adjusted",
+        "wrong time", "wrong hours", "fix my time", "time fix", "change my time",
+        "missed clock", "forgot to clock", "change hours",
+    ]
+    if any(w in text_lower for w in approval_keywords):
+        return "time correction submitted — PENDING ADMIN APPROVAL (can't verify until approved)", False
 
     results    = []
     all_verified = True
@@ -776,6 +791,7 @@ Write Amy's reply. Non-negotiable rules:
 - Max 2 sentences. Get to the point.
 - If notes verified present: "yeah can see them now, all good" style
 - If notes not found yet: "can't see them yet — did they save properly?" style
+- If PENDING ADMIN APPROVAL in verification: acknowledge they submitted it and say it just needs approval from the admin side — classify COMPLEX so the manager can approve. Say something like "got it, just needs sign-off from our end — I'll get it sorted"
 - If COMPLEX: "leave it with me, I'll sort it out" NOT "I will escalate this to management"
 - If worker is asking something unrelated to compliance (shift swaps, leave etc): classify COMPLEX
 
