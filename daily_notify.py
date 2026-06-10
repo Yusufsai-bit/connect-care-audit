@@ -226,58 +226,19 @@ def main():
         for u in users.values()
     }
 
-    if not issues:
-        print("No issues found — all workers fully compliant.")
-        return
+    # ── Credential issues only — workers get shift compliance msgs at shift-end ──
+    # Shift compliance (missing notes, GPS, clock-in/out) is handled in real-time
+    # by the Railway shift-end check 30 min after each shift finishes.
+    # The morning job only sends credential expiry/renewal reminders (which have
+    # no shift-end trigger) and posts the full audit summary to CC Management.
 
-    # ── Group issues ──────────────────────────────────────────────────────
-    # notify_workers: CRITICAL/HIGH (all categories) + MEDIUM credentials
-    notify_workers = {}
+    cred_notify = {}   # workers with credential issues to message directly
+    all_flagged = {}   # all workers with any notifiable issue (for CC Management summary)
 
-    for iss in issues:
-        include = (
-            iss.severity in NOTIFY_SEVERITIES
-            or (iss.severity == "MEDIUM" and iss.category in CRED_CATEGORIES)
-        )
-        if include:
-            issue_dict = {
-                "severity": iss.severity,
-                "category": iss.category,
-                "client":   iss.client or "",
-                "date":     iss.date or "",
-                "detail":   iss.detail or "",
-            }
-            notify_workers.setdefault(iss.worker, []).append(issue_dict)
-
-    if not notify_workers:
-        print("No notifiable issues — nothing to send.")
-        return
-
-    print(f"Workers to notify: {len(notify_workers)}")
-
-    dry_run = not bool(CONNECTEAM_SENDER_ID)
-    if dry_run:
-        print("⚠️  DRY RUN — CONNECTEAM_SENDER_ID not set (Communications Hub upgrade pending).")
-        print("   Messages will be logged but NOT sent. Add CONNECTEAM_SENDER_ID to activate.\n")
-    else:
-        print("Channel: Connecteam Chat\n")
-
-    log      = load_log()
-    sent_ok  = []
-    sent_err = []
-
-    # Workers already notified for this audit date — use ISO date not the human label
-    already_notified = {
-        e["worker"]
-        for e in log
-        if e.get("audit_date") == audit_date and e.get("status") in ("Sent", "Pending")
-    }
-    if already_notified:
-        print(f"Already notified today (skipping): {', '.join(sorted(already_notified))}")
-
-    # M10: build a lookup of which credential categories were already notified recently (7 days)
+    # M10: skip credential categories already notified within 7 days
+    log            = load_log()
     seven_days_ago = (now - datetime.timedelta(days=7)).isoformat()
-    recent_cred_notifs: dict[str, set] = {}  # worker_name → set of categories notified in last 7 days
+    recent_cred_notifs: dict = {}
     for e in log:
         if e.get("sent_at_iso", "") < seven_days_ago:
             continue
@@ -288,48 +249,62 @@ def main():
                 if cat in CRED_CATEGORIES:
                     recent_cred_notifs.setdefault(wn, set()).add(cat)
 
-    for wname, issues_list in notify_workers.items():
+    for iss in issues:
+        notifiable = (
+            iss.severity in NOTIFY_SEVERITIES
+            or (iss.severity == "MEDIUM" and iss.category in CRED_CATEGORIES)
+        )
+        if not notifiable:
+            continue
+        issue_dict = {
+            "severity": iss.severity, "category": iss.category,
+            "client": iss.client or "", "date": iss.date or "", "detail": iss.detail or "",
+        }
+        all_flagged.setdefault(iss.worker, []).append(issue_dict)
+        if iss.category in CRED_CATEGORIES:
+            already_sent = recent_cred_notifs.get(iss.worker, set())
+            if iss.category not in already_sent:
+                cred_notify.setdefault(iss.worker, []).append(issue_dict)
+            else:
+                print(f"  M10: {iss.worker} — skipping '{iss.category}' (notified in last 7 days)")
+
+    print(f"Workers with any issue: {len(all_flagged)}")
+    print(f"Workers with credential issues to notify: {len(cred_notify)}")
+
+    dry_run  = not bool(CONNECTEAM_SENDER_ID)
+    sent_ok  = []
+    sent_err = []
+
+    already_notified = {
+        e["worker"]
+        for e in log
+        if e.get("audit_date") == audit_date and e.get("status") in ("Sent", "Pending")
+        and any(i.get("Issue") in CRED_CATEGORIES for i in e.get("issues", []))
+    }
+    if already_notified:
+        print(f"Already sent credential notice today (skipping): {', '.join(sorted(already_notified))}")
+
+    for wname, cred_issues in cred_notify.items():
         if wname in already_notified:
             continue
         wid = (contacts.get(wname) or {}).get("userId")
-
-        # Split into credential vs shift issues for targeted messages
-        already_sent_creds = recent_cred_notifs.get(wname, set())
-        cred_issues  = [i for i in issues_list
-                        if i["category"] in CRED_CATEGORIES
-                        and i["category"] not in already_sent_creds]
-        if len(already_sent_creds) > 0 and len(cred_issues) < len([i for i in issues_list if i["category"] in CRED_CATEGORIES]):
-            skipped = [i["category"] for i in issues_list if i["category"] in CRED_CATEGORIES and i["category"] in already_sent_creds]
-            print(f"  M10: {wname} — skipping re-notify for {set(skipped)} (notified in last 7 days)")
-        shift_issues = [i for i in issues_list if i["category"] not in CRED_CATEGORIES]
-
-        msgs_to_send = []
-        if shift_issues:
-            msgs_to_send.append(build_message(wname, shift_issues, period))
-        if cred_issues:
-            msgs_to_send.append(build_credential_message(wname, cred_issues))
-
+        msg = build_credential_message(wname, cred_issues)
         sev_counts = {}
-        for i in issues_list:
+        for i in cred_issues:
             sev_counts[i["severity"]] = sev_counts.get(i["severity"], 0) + 1
 
         if dry_run:
-            print(f"  ~ Would notify {wname} ({len(issues_list)} issues)")
+            print(f"  ~ Would send credential notice to {wname}")
             status = "Pending"
             sent_ok.append(wname)
         else:
-            all_sent = True
-            for msg in msgs_to_send:
-                ok, result = send(wid, msg, worker_name=wname)
-                if not ok:
-                    print(f"  ✗ Failed {wname}: {result}")
-                    all_sent = False
-                    break
-            if all_sent:
-                print(f"  ✓ Sent to {wname} ({len(msgs_to_send)} message(s))")
+            ok, result = send(wid, msg, worker_name=wname)
+            if ok:
+                print(f"  ✓ Credential notice sent to {wname}")
                 status = "Sent"
                 sent_ok.append(wname)
             else:
+                print(f"  ✗ Failed {wname}: {result}")
                 sent_err.append(wname)
                 continue
 
@@ -342,15 +317,11 @@ def main():
             "audit_date":      audit_date,
             "period":          period,
             "severity_counts": sev_counts,
-            "issue_count":     len(issues_list),
-            "issues": [{
-                "Severity": i["severity"],
-                "Issue":    i["category"],
-                "Client":   i["client"],
-                "Date":     i["date"],
-                "Detail":   i["detail"],
-            } for i in issues_list],
-            "message_sent":    msgs_to_send[0] if msgs_to_send else "",
+            "issue_count":     len(cred_issues),
+            "issues":          [{"Severity": i["severity"], "Issue": i["category"],
+                                 "Client": i["client"], "Date": i["date"],
+                                 "Detail": i["detail"]} for i in cred_issues],
+            "message_sent":    msg,
             "channel":         "connecteam" if not dry_run else "pending",
             "status":          status,
             "acknowledged_at": None,
@@ -363,26 +334,25 @@ def main():
     save_log(log)
 
     print(f"\n{'='*60}")
-    print(f"Done — {len(sent_ok)} sent, {len(sent_err)} failed")
-    if sent_ok:  print(f"  Sent:   {', '.join(sent_ok)}")
-    if sent_err: print(f"  Failed: {', '.join(sent_err)}")
+    print(f"Credential notices — {len(sent_ok)} sent, {len(sent_err)} failed")
     print(f"{'='*60}\n")
 
-    # Post audit summary to CC Management
-    if sent_ok:
-        crit_count = sum(
-            1 for e in log
-            if e.get("audit_date") == audit_date
-            and (e.get("severity_counts") or {}).get("CRITICAL", 0) > 0
-        )
-        summary = (
-            f"Daily audit done — {len(sent_ok)} worker(s) notified"
-            + (f", {len(sent_err)} failed" if sent_err else "")
-            + (f". {crit_count} with CRITICAL issues." if crit_count else ".")
-            + f"\nWorkers: {', '.join(sent_ok)}"
-            + f"\nNoon check will follow up on anyone who hasn't replied by 12 PM."
-        )
-        post_to_cc_management(summary)
+    # ── Post full audit summary to CC Management ──────────────────────────────
+    # Shift compliance issues are handled in real-time by Railway (30 min after shift end).
+    # This gives managers a morning overview of everything flagged.
+    if all_flagged:
+        crit_workers = [w for w, iss in all_flagged.items()
+                        if any(i["severity"] == "CRITICAL" for i in iss)]
+        lines = [f"Morning audit — {yesterday.strftime('%a %d %b')}:\n"]
+        if crit_workers:
+            lines.append(f"CRITICAL: {', '.join(crit_workers)}")
+        lines.append(f"{len(all_flagged)} worker(s) with issues in total.")
+        if sent_ok:
+            lines.append(f"Credential notices sent to: {', '.join(sent_ok)}")
+        lines.append("Shift compliance messages will fire 30 min after each shift ends today.")
+        post_to_cc_management("\n".join(lines))
+    else:
+        post_to_cc_management(f"Morning audit — {yesterday.strftime('%a %d %b')}: all clear, no issues found.")
 
     # ── Lock time entries for days > 2 days ago ───────────────────────────
     _lock_prior_days(contacts, now)

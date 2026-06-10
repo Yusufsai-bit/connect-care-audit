@@ -1071,7 +1071,7 @@ SCHEDULER_ID    = 1775479
 
 
 def _shift_check_loop():
-    """Poll every 10 min for shifts that ended 20-55 min ago and haven't been checked."""
+    """Poll every 10 min for shifts that ended 25-90 min ago and haven't been checked."""
     time.sleep(15)  # brief startup delay
     while True:
         try:
@@ -1119,17 +1119,24 @@ def _run_5pm_deadline_check():
 
 
 def _check_recently_ended_shifts():
+    """
+    Check shifts that ended 25 min – 24 hours ago and haven't been checked yet.
+    The 25-minute minimum gives workers time to finish up and submit notes.
+    The 24-hour lookback ensures shifts that ended during quiet hours (after 7 PM)
+    get checked the next morning when the messaging window reopens.
+    """
     if not CT_KEY:
         return
-    now_ts = time.time()
+    now_ts   = time.time()
     aest_now = datetime.datetime.now(AEST)
-    today_start = int(aest_now.replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
-    today_end   = int(aest_now.replace(hour=23, minute=59, second=59, microsecond=0).timestamp())
+    # Look back 24 hours so overnight quiet-hours shifts get picked up in the morning
+    window_start = int((aest_now - datetime.timedelta(hours=24)).timestamp())
+    window_end   = int(aest_now.timestamp())
 
     r = requests.get(
         f"{BASE_URL}/scheduler/v1/schedulers/{SCHEDULER_ID}/shifts",
         headers={"X-API-KEY": CT_KEY},
-        params={"startTime": today_start, "endTime": today_end, "limit": 50},
+        params={"startTime": window_start, "endTime": window_end, "limit": 100},
         timeout=15,
     )
     if not r.ok:
@@ -1142,8 +1149,8 @@ def _check_recently_ended_shifts():
         shift_id = shift.get("id", "")
         age      = now_ts - end_ts
 
-        # Only act on shifts that ended between 20 and 55 minutes ago
-        if not (20 * 60 <= age <= 55 * 60):
+        # Only act on shifts that ended at least 25 minutes ago
+        if age < 25 * 60:
             continue
 
         assigned = shift.get("assignedUserIds") or []
