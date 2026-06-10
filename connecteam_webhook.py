@@ -79,8 +79,25 @@ GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 GITHUB_REPO  = os.environ.get("GITHUB_REPO", "Yusufsai-bit/connect-care-audit")
 LOG_PATH     = "notifications_log.json"
 
-PENDING_RELAY_FILE = os.path.join(os.path.dirname(__file__) or ".", "pending_relay_queue.json")
+PENDING_RELAY_FILE  = os.path.join(os.path.dirname(__file__) or ".", "pending_relay_queue.json")
 SHIFT_NOTIFIED_FILE = os.path.join(os.path.dirname(__file__) or ".", "shift_notified.json")
+
+QUIET_START = 19  # 7 PM AEST — no worker messages after this hour
+QUIET_END   = 6   # 6 AM AEST — no worker messages before this hour
+
+
+def _is_quiet_hours():
+    hour = datetime.datetime.now(AEST).hour
+    return hour >= QUIET_START or hour < QUIET_END
+
+
+def _worker_send(user_id, msg):
+    """Send a chat message to a worker, but only between 6 AM and 7 PM AEST."""
+    if _is_quiet_hours():
+        ts = datetime.datetime.now(AEST).strftime("%I:%M %p")
+        print(f"  [quiet hours {ts}] skipping message to user {user_id}")
+        return False
+    return send_connecteam_chat(user_id, msg)
 
 
 def load_pending_relay():
@@ -219,13 +236,30 @@ def save_notifications(notifs):
 
 
 def mark_acknowledged(user_id):
-    """Mark the most recent Sent notification for this worker as Acknowledged."""
+    """Mark all Sent notifications for this worker as Acknowledged."""
     notifs  = load_notifications()
     changed = False
     for n in notifs:
         if str(n.get("worker_id")) == str(user_id) and n.get("status") == "Sent":
             n["status"]          = "Acknowledged"
             n["acknowledged_at"] = datetime.datetime.now().strftime("%d %b %Y, %I:%M %p")
+            changed = True
+    if changed:
+        save_notifications(notifs)
+    return changed
+
+
+def mark_resolved(user_id):
+    """Mark all Sent/Acknowledged notifications for this worker as Resolved (issue confirmed fixed)."""
+    notifs  = load_notifications()
+    changed = False
+    now_str = datetime.datetime.now().strftime("%d %b %Y, %I:%M %p")
+    for n in notifs:
+        if str(n.get("worker_id")) == str(user_id) and n.get("status") in ("Sent", "Acknowledged"):
+            n["status"]       = "Resolved"
+            n["resolved_at"]  = now_str
+            if not n.get("acknowledged_at"):
+                n["acknowledged_at"] = now_str
             changed = True
     if changed:
         save_notifications(notifs)
@@ -469,15 +503,18 @@ def handle_auto_clock_out(data):
 
     worker = get_worker_name(user_id)
     client = get_job_name(job_id) if job_id else "unknown client"
-    first  = worker.split()[0] if worker else "Hi"
+    first  = worker.split()[0] if worker else "there"
 
-    msg = (
-        f"Hi {first}, your shift at {client} was automatically clocked out by the system "
-        f"because you didn't clock out manually. Please check your times are correct and "
-        f"submit your shift notes if you haven't already."
-    )
-    sent = send_connecteam_chat(user_id, msg)
-    if not sent:
+    flags = [
+        f"system auto clocked you out at {client} — you may not have clocked out manually",
+        "check your times are right and add notes if you haven't yet",
+    ]
+    msg = _generate_shift_end_msg(first, client, flags)
+
+    sent = _worker_send(user_id, msg)
+    if sent:
+        append_to_conversation(user_id, "amy", msg)
+    elif not _is_quiet_hours():
         phone = get_worker_phone(user_id)
         if phone:
             send_msg(phone, msg)
@@ -583,17 +620,17 @@ def handle_clock_out(data):
         print(f"  Clock-out check passed for {worker_name} ({client_name}) — all good")
         return
 
-    # Build worker message
-    lines = [f"Hi {first}, you've just clocked out from {client_name}."]
-    for flag in worker_flags:
-        lines.append(f"- Please note: {flag}.")
-    lines.append("Reply if you need anything.")
-    msg = "\n\n".join(lines)
+    msg = _generate_shift_end_msg(first, client_name, worker_flags)
 
-    sent = send_connecteam_chat(user_id, msg)
+    sent = _worker_send(user_id, msg)
     if sent:
         append_to_conversation(user_id, "amy", msg)
-    else:
+        # Burn shift-end dedup key so the scheduled check doesn't double-message (C7)
+        today = datetime.datetime.now(AEST).strftime("%Y-%m-%d")
+        notified = load_shift_notified()
+        notified[f"{user_id}_clockout_{today}"] = time.time()
+        save_shift_notified(notified)
+    elif not _is_quiet_hours():
         phone = get_worker_phone(user_id)
         if phone:
             send_msg(phone, msg)
@@ -626,40 +663,52 @@ def get_worker_issues(user_id):
 
 def verify_worker_claims(user_id, text):
     """
-    If the worker claims to have done something (submitted notes, clocked out, etc.),
-    check Connecteam to see if it's actually done.
-    Returns a plain-English verification string, or "" if nothing to verify.
+    If the worker claims to have done something, check Connecteam to see if it's true.
+    Returns (plain-English verification string, is_resolved: bool).
     """
     text_lower = text.lower()
     claim_keywords = ["submitted", "done", "updated", "fixed", "added", "sent", "completed",
-                      "uploaded", "filled", "put in", "just did", "sorted", "logged"]
+                      "uploaded", "filled", "put in", "just did", "sorted", "logged",
+                      "clocked", "clock out", "clocked out", "clocking out"]
     if not any(w in text_lower for w in claim_keywords):
-        return ""
+        return "", False
 
-    results = []
+    results    = []
+    all_verified = True
+
+    today     = datetime.date.today().isoformat()
+    yesterday = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
+    data      = ct_get(f"/time-clock/v1/time-clocks/{TIME_CLOCK_ID}/time-activities",
+                       {"startDate": yesterday, "endDate": today})
+    by_user   = (data.get("data") or {}).get("timeActivitiesByUsers") or []
+    activity  = next((e for e in by_user if str(e.get("userId")) == str(user_id)), None)
+    shifts    = (activity.get("shifts") or []) if activity else []
 
     # Check notes
     if any(w in text_lower for w in ["note", "notes", "shift note", "progress note"]):
-        try:
-            today     = datetime.date.today().isoformat()
-            yesterday = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
-            data      = ct_get(f"/time-clock/v1/time-clocks/{TIME_CLOCK_ID}/time-activities",
-                               {"startDate": yesterday, "endDate": today})
-            by_user   = (data.get("data") or {}).get("timeActivitiesByUsers") or []
-            found_note = False
-            for entry in by_user:
-                if str(entry.get("userId")) == str(user_id):
-                    for shift in (entry.get("shifts") or []):
-                        atts = shift.get("shiftAttachments") or []
-                        note = get_note_text(atts)
-                        if note and len(note.split()) >= 10:
-                            found_note = True
-                            break
-            results.append("shift notes: VERIFIED ✓" if found_note else "shift notes: NOT FOUND — can't see them yet")
-        except Exception:
-            pass
+        found_note = False
+        for shift in shifts:
+            atts = shift.get("shiftAttachments") or []
+            note = get_note_text(atts)
+            if note and len(note.split()) >= 10:
+                found_note = True
+                break
+        results.append("shift notes: VERIFIED ✓" if found_note else "shift notes: NOT FOUND — can't see them yet")
+        if not found_note:
+            all_verified = False
 
-    return ", ".join(results)
+    # Check clock-out
+    if any(w in text_lower for w in ["clocked out", "clock out", "clocking out", "clocked off"]):
+        clocked_out = any(
+            (s.get("end") or {}).get("timestamp") for s in shifts
+        )
+        results.append("clock-out: VERIFIED ✓" if clocked_out else "clock-out: NOT FOUND in time clock")
+        if not clocked_out:
+            all_verified = False
+
+    verified_str = ", ".join(results)
+    resolved = bool(results) and all_verified
+    return verified_str, resolved
 
 
 def _call_claude(prompt, max_tokens=300):
@@ -819,7 +868,7 @@ def handle_chat_reply(data):
             wid      = relay["worker_id"]
             wname    = relay["worker_name"]
             composed = compose_from_guidance(wname, text, relay["reply"], relay.get("issues", []))
-            send_connecteam_chat(wid, composed)
+            _worker_send(wid, composed)
             append_to_conversation(wid, "amy", composed)
             print(f"  Amy sent composed response to {wname} based on manager guidance")
             if PENDING_RELAY_QUEUE:
@@ -834,7 +883,7 @@ def handle_chat_reply(data):
     print(f"  Message from {worker}: '{text[:80]}'")
 
     # ── Verify any claims the worker is making ─────────────────────────────────
-    verification = verify_worker_claims(user_id, text)
+    verification, is_resolved = verify_worker_claims(user_id, text)
     if verification:
         print(f"  Verification: {verification}")
 
@@ -844,15 +893,18 @@ def handle_chat_reply(data):
     append_to_conversation(user_id, "worker", text)
     is_complex, amy_reply = generate_amy_reply(worker, text, issues, verification, history)
 
-    # Only acknowledge if the worker is actually responding to a compliance issue —
-    # not for unrelated messages like shift-swap requests (those get classified complex).
-    if not is_complex or verification:
+    # H12: Mark Resolved when Connecteam confirms the issue is actually fixed.
+    # Otherwise Acknowledge if they replied (but don't mark resolved yet).
+    if is_resolved:
+        mark_resolved(user_id)
+        print(f"  Marked RESOLVED for {worker} — verified by Connecteam API")
+    elif not is_complex or verification:
         mark_acknowledged(user_id)
 
     if amy_reply and SENDER_ID and CT_KEY:
-        send_connecteam_chat(user_id, amy_reply)
+        _worker_send(user_id, amy_reply)
         append_to_conversation(user_id, "amy", amy_reply)
-        print(f"  Amy replied ({'holding' if is_complex else 'resolved'}): '{amy_reply[:80]}'")
+        print(f"  Amy replied ({'holding' if is_complex else 'closed'}): '{amy_reply[:80]}'")
 
     # ── Complex → ask CC Management what to say ───────────────────────────────
     if is_complex:
@@ -907,6 +959,43 @@ def _shift_check_loop():
         except Exception as e:
             print(f"[shift-check] error: {e}")
         time.sleep(600)
+
+
+def _deadline_check_loop():
+    """Fire once per day at 5 PM AEST — SMS manager about workers still unresolved (H3)."""
+    last_fired = None
+    while True:
+        time.sleep(60)
+        now = datetime.datetime.now(AEST)
+        today = now.strftime("%Y-%m-%d")
+        if now.hour == 17 and now.minute < 5 and today != last_fired:
+            last_fired = today
+            try:
+                _run_5pm_deadline_check()
+            except Exception as e:
+                print(f"[5PM] error: {e}")
+
+
+def _run_5pm_deadline_check():
+    """Alert manager about workers who haven't responded by 5 PM deadline."""
+    today   = datetime.datetime.now(AEST).strftime("%Y-%m-%d")
+    notifs  = load_notifications()
+    pending = [
+        n for n in notifs
+        if n.get("status") in ("Sent", "Escalated")
+        and (n.get("audit_date") == today or n.get("sent_at_iso", "").startswith(today))
+        and not n.get("dry_run")
+    ]
+    if not pending:
+        print("[5PM] All workers responded — no action needed")
+        return
+    names = sorted({n.get("worker", "") for n in pending})
+    msg = (
+        f"5 PM deadline: {len(names)} worker(s) still haven't responded — "
+        f"{', '.join(names)}. Consider calling them directly."
+    )
+    send_msg(MANAGER_NUMBER, msg)
+    print(f"[5PM] Manager alerted about: {', '.join(names)}")
 
 
 def _check_recently_ended_shifts():
@@ -1008,8 +1097,15 @@ def _run_shift_end_check(user_id, job_id, sched_end_ts, shift):
         print(f"[shift-check] {worker_name} ({client_name}) all good")
         return True
 
+    # C7: skip if clock-out handler already messaged this worker today
+    today = datetime.datetime.now(AEST).strftime("%Y-%m-%d")
+    already_notified = load_shift_notified()
+    if f"{user_id}_clockout_{today}" in already_notified:
+        print(f"[shift-check] skipping {worker_name} — already messaged at clock-out")
+        return True
+
     msg = _generate_shift_end_msg(first, client_name, flags)
-    sent = send_connecteam_chat(user_id, msg)
+    sent = _worker_send(user_id, msg)
     if sent:
         append_to_conversation(user_id, "amy", msg)
     print(f"[shift-check] notified {worker_name}: {flags}")
@@ -1159,5 +1255,7 @@ if __name__ == "__main__":
     print(f"Starting Connect Care webhook receiver on port {PORT}...")
     threading.Thread(target=_shift_check_loop, daemon=True).start()
     print("Shift-end compliance checker started (polls every 10 min).")
+    threading.Thread(target=_deadline_check_loop, daemon=True).start()
+    print("5 PM deadline checker started.")
     server = HTTPServer(("0.0.0.0", PORT), WebhookHandler)
     server.serve_forever()
