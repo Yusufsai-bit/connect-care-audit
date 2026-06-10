@@ -255,13 +255,32 @@ def main():
     if already_notified:
         print(f"Already notified today (skipping): {', '.join(sorted(already_notified))}")
 
+    # M10: build a lookup of which credential categories were already notified recently (7 days)
+    seven_days_ago = (now - datetime.timedelta(days=7)).isoformat()
+    recent_cred_notifs: dict[str, set] = {}  # worker_name → set of categories notified in last 7 days
+    for e in log:
+        if e.get("sent_at_iso", "") < seven_days_ago:
+            continue
+        if e.get("status") in ("Sent", "Acknowledged", "Escalated", "Resolved"):
+            wn = e.get("worker", "")
+            for iss in e.get("issues", []):
+                cat = iss.get("Issue", "")
+                if cat in CRED_CATEGORIES:
+                    recent_cred_notifs.setdefault(wn, set()).add(cat)
+
     for wname, issues_list in notify_workers.items():
         if wname in already_notified:
             continue
         wid = (contacts.get(wname) or {}).get("userId")
 
         # Split into credential vs shift issues for targeted messages
-        cred_issues  = [i for i in issues_list if i["category"] in CRED_CATEGORIES]
+        already_sent_creds = recent_cred_notifs.get(wname, set())
+        cred_issues  = [i for i in issues_list
+                        if i["category"] in CRED_CATEGORIES
+                        and i["category"] not in already_sent_creds]
+        if len(already_sent_creds) > 0 and len(cred_issues) < len([i for i in issues_list if i["category"] in CRED_CATEGORIES]):
+            skipped = [i["category"] for i in issues_list if i["category"] in CRED_CATEGORIES and i["category"] in already_sent_creds]
+            print(f"  M10: {wname} — skipping re-notify for {set(skipped)} (notified in last 7 days)")
         shift_issues = [i for i in issues_list if i["category"] not in CRED_CATEGORIES]
 
         msgs_to_send = []
