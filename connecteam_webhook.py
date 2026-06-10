@@ -1027,12 +1027,15 @@ class WebhookHandler(BaseHTTPRequestHandler):
             return
         if path == "/status":
             status = {
-                "sender_id":    SENDER_ID,
-                "amy_ids":      list(AMY_SENDER_IDS),
-                "ct_key_set":   bool(CT_KEY),
-                "ai_key_set":   bool(ANTHROPIC_API_KEY),
-                "relay_queue":  len(PENDING_RELAY_QUEUE),
-                "uptime":       datetime.datetime.now(AEST).isoformat(),
+                "sender_id":         SENDER_ID,
+                "sender_id_live":    int(os.environ.get("CONNECTEAM_SENDER_ID", "0") or "0"),
+                "amy_ids":           list(AMY_SENDER_IDS),
+                "ct_key_set":        bool(CT_KEY),
+                "ct_key_live":       bool(os.environ.get("CONNECTEAM_API_KEY")),
+                "ai_key_set":        bool(ANTHROPIC_API_KEY),
+                "ai_key_live":       bool(os.environ.get("ANTHROPIC_API_KEY")),
+                "relay_queue":       len(PENDING_RELAY_QUEUE),
+                "uptime":            datetime.datetime.now(AEST).isoformat(),
             }
             body = json.dumps(status, indent=2).encode()
             self.send_response(200)
