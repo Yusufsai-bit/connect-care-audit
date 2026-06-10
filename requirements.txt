@@ -1,7 +1,4 @@
-streamlit
-pandas
-plotly
 requests
 anthropic
-openpyxl
 twilio
+tzdata
