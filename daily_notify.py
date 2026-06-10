@@ -38,6 +38,9 @@ def load_log():
 
 
 def save_log(entries):
+    # Trim to last 30 days to keep file size manageable
+    cutoff = (datetime.datetime.now(AEST) - datetime.timedelta(days=30)).isoformat()
+    entries = [e for e in entries if e.get("sent_at_iso", "9999") >= cutoff]
     with open(NOTIFICATIONS_FILE, "w", encoding="utf-8") as f:
         json.dump(entries, f, default=str, indent=2)
 
@@ -181,9 +184,10 @@ def _add_critical_profile_notes(issues, contacts, now):
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
-    now       = datetime.datetime.now(AEST)
-    yesterday = now - datetime.timedelta(days=1)
-    period    = f"yesterday ({yesterday.strftime('%a %d %b')})"
+    now           = datetime.datetime.now(AEST)
+    yesterday     = now - datetime.timedelta(days=1)
+    audit_date    = yesterday.strftime("%Y-%m-%d")   # used for dedup — never changes format
+    period        = f"yesterday ({yesterday.strftime('%a %d %b')})"  # human label for messages
 
     print(f"\n{'='*60}")
     print(f"Connect Care Daily Notifier — {now.strftime('%d %b %Y %I:%M %p AEST')}")
@@ -242,11 +246,11 @@ def main():
     sent_ok  = []
     sent_err = []
 
-    # Workers already notified for this same period — don't resend
+    # Workers already notified for this audit date — use ISO date not the human label
     already_notified = {
         e["worker"]
         for e in log
-        if e.get("period") == period and e.get("status") in ("Sent", "Pending")
+        if e.get("audit_date") == audit_date and e.get("status") in ("Sent", "Pending")
     }
     if already_notified:
         print(f"Already notified today (skipping): {', '.join(sorted(already_notified))}")
@@ -296,6 +300,7 @@ def main():
             "worker_id":       wid,
             "sent_at":         now.strftime("%d %b %Y, %I:%M %p"),
             "sent_at_iso":     now.isoformat(),
+            "audit_date":      audit_date,
             "period":          period,
             "severity_counts": sev_counts,
             "issue_count":     len(issues_list),

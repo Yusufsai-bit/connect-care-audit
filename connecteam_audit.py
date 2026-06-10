@@ -1285,8 +1285,8 @@ def run_audit(days_back=7):
             act_id       = act.get("id", "")
             attachments  = act.get("shiftAttachments") or []
 
-            # Skip note checks for shifts still in progress (no clock-out within last 14h)
-            if not clock_out and (now.timestamp() - clock_in) / 3600 <= 14:
+            # Skip note checks for shifts still in progress — consistent with 8.5h clock-out threshold
+            if not clock_out and (now.timestamp() - clock_in) / 3600 <= 8.5:
                 continue
 
             # Missing signature

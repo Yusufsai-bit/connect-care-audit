@@ -33,17 +33,24 @@ def save_log(entries):
 
 def build_escalation_message(worker_name, issue_count):
     first = worker_name.split()[0]
-    return "\n".join([
-        f"Hi {first},",
-        "",
-        f"Just a reminder — you had {issue_count} compliance issue(s) flagged from yesterday's shift "
-        f"and I haven't heard back from you yet.",
-        "",
-        "The deadline is 5 PM today. Please reply and let me know what happened "
-        "and what you've done to fix it.",
-        "",
-        "Cheers",
-    ])
+    from connecteam_audit import ANTHROPIC_API_KEY
+    if ANTHROPIC_API_KEY:
+        try:
+            import anthropic
+            client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+            prompt = f"""You are Amy, a coordinator at Connect Care. You messaged a support worker called {first} earlier today about {issue_count} compliance issue(s) from their shift, but they haven't replied yet. It's now 3 PM and the deadline to respond is 5 PM.
+
+Write a brief, natural follow-up nudge. Sound like a real person — casual but clear that it's time-sensitive. Don't be rude or threatening. 2-3 sentences max. No emojis. Just the message."""
+            resp = client.messages.create(
+                model="claude-haiku-4-5",
+                max_tokens=120,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            return resp.content[0].text.strip()
+        except Exception:
+            pass
+    # Fallback
+    return f"Hey {first}, just following up — haven't heard back from you yet about yesterday's shift issues. Can you get back to me before 5 PM today?"
 
 
 def main():
@@ -58,9 +65,16 @@ def main():
     pending = [
         e for e in log
         if e.get("status") == "Sent"
-        and e.get("sent_at_iso", "").startswith(today)
+        and (e.get("audit_date") == today or e.get("sent_at_iso", "").startswith(today))
         and not e.get("dry_run")
     ]
+
+    # Skip workers already escalated today
+    already_escalated = {e.get("worker") for e in log if e.get("status") == "Escalated"
+                         and e.get("sent_at_iso", "").startswith(today)}
+    pending = [e for e in pending if e.get("worker") not in already_escalated]
+    if already_escalated:
+        print(f"Already escalated today (skipping): {', '.join(sorted(already_escalated))}")
 
     if not pending:
         print("No unacknowledged notifications from today — nothing to escalate.")

@@ -47,8 +47,9 @@ NOTIFICATIONS_FILE = os.environ.get("NOTIFICATIONS_FILE", "notifications_log.jso
 WEBHOOK_SECRET     = os.environ.get("WEBHOOK_SECRET", "")
 PORT               = int(os.environ.get("PORT", "8080"))
 MANAGER_NUMBER     = os.environ.get("MANAGER_NUMBER", "+61431836771")
-OBSERVER_IDS       = {2149475, 9736871, 2201497}  # Yusuf, Nada, Faduma
+OBSERVER_IDS       = {2149475, 9736871, 2201497}  # Yusuf, Nada, Faduma — keep in sync with audit.py
 AMY_SENDER_IDS     = {272153}  # Amy's chat sender account — ignore her own messages
+ALL_SYSTEM_IDS     = OBSERVER_IDS | AMY_SENDER_IDS  # never treat these as workers
 
 # Time clock constants (mirrors connecteam_audit.py)
 TIME_CLOCK_ID    = 1776332
@@ -78,9 +79,49 @@ GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 GITHUB_REPO  = os.environ.get("GITHUB_REPO", "Yusufsai-bit/connect-care-audit")
 LOG_PATH     = "notifications_log.json"
 
+PENDING_RELAY_FILE = os.path.join(os.path.dirname(__file__) or ".", "pending_relay_queue.json")
+SHIFT_NOTIFIED_FILE = os.path.join(os.path.dirname(__file__) or ".", "shift_notified.json")
+
+
+def load_pending_relay():
+    try:
+        with open(PENDING_RELAY_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return []
+
+
+def save_pending_relay(queue):
+    try:
+        with open(PENDING_RELAY_FILE, "w", encoding="utf-8") as f:
+            json.dump(queue, f, indent=2)
+    except Exception as e:
+        print(f"[WARN] Could not save relay queue: {e}")
+
+
+def load_shift_notified():
+    """Load persisted shift-notification keys; prune entries older than 24h."""
+    try:
+        with open(SHIFT_NOTIFIED_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        cutoff = time.time() - 86400
+        return {k: v for k, v in data.items() if v >= cutoff}
+    except Exception:
+        return {}
+
+
+def save_shift_notified(mapping):
+    try:
+        with open(SHIFT_NOTIFIED_FILE, "w", encoding="utf-8") as f:
+            json.dump(mapping, f, indent=2)
+    except Exception as e:
+        print(f"[WARN] Could not save shift-notified log: {e}")
+
+
 # Queue of complex worker replies waiting for a manager response from CC Management.
 # Each entry: {"worker_id": ..., "worker_name": ..., "reply": ..., "issues": [...]}
-PENDING_RELAY_QUEUE = []
+# Loaded from disk on startup so it survives Railway restarts.
+PENDING_RELAY_QUEUE = load_pending_relay()
 
 AMY_MEMORY_FILE = os.path.join(os.path.dirname(__file__) or ".", "amy_conversation_log.json")
 
@@ -186,8 +227,12 @@ def ct_get(path, params=None):
             headers={"X-API-KEY": CT_KEY, "Accept": "application/json"},
             params=params, timeout=15,
         )
-        return r.json() if r.ok else {}
-    except Exception:
+        if not r.ok:
+            print(f"[WARN] ct_get {path} returned {r.status_code}: {r.text[:200]}")
+            return {}
+        return r.json()
+    except Exception as e:
+        print(f"[WARN] ct_get {path} failed: {e}")
         return {}
 
 
@@ -543,16 +588,16 @@ def handle_clock_out(data):
 
 def load_worker_conversations():
     """Load worker_id → conversation_id mapping from worker_conversations.json."""
+    path = os.path.join(os.path.dirname(__file__) or ".", "worker_conversations.json")
     try:
-        from connecteam_audit import load_worker_conversations as _load
-        return _load()
-    except Exception:
-        path = os.path.join(os.path.dirname(__file__), "worker_conversations.json")
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            return {}
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        print("[WARN] worker_conversations.json not found — all messages will fall back to private chat")
+        return {}
+    except Exception as e:
+        print(f"[WARN] Could not load worker_conversations.json: {e}")
+        return {}
 
 
 def get_worker_issues(user_id):
@@ -726,6 +771,7 @@ def handle_chat_reply(data):
     if conv_id == CC_MGMT_CONV_ID and uid in OBSERVER_IDS:
         if PENDING_RELAY_QUEUE:
             relay    = PENDING_RELAY_QUEUE.pop(0)
+            save_pending_relay(PENDING_RELAY_QUEUE)
             wid      = relay["worker_id"]
             wname    = relay["worker_name"]
             composed = compose_from_guidance(wname, text, relay["reply"], relay.get("issues", []))
@@ -762,6 +808,7 @@ def handle_chat_reply(data):
     if is_complex:
         relay = {"worker_id": user_id, "worker_name": worker, "reply": text, "issues": issues}
         PENDING_RELAY_QUEUE.append(relay)
+        save_pending_relay(PENDING_RELAY_QUEUE)
         if len(PENDING_RELAY_QUEUE) == 1:
             _post_to_cc_mgmt(relay)
         print(f"  Asked CC Management for guidance on {worker} ({len(PENDING_RELAY_QUEUE)} pending)")
@@ -796,7 +843,6 @@ def handle_form_submitted(data):
 # ── Shift-end compliance checker (background thread) ─────────────────────────
 
 SCHEDULER_ID    = 1775479
-_shift_notified = set()   # (user_id, shift_id) — in-memory dedup across checks
 
 
 def _shift_check_loop():
@@ -841,13 +887,15 @@ def _check_recently_ended_shifts():
         assigned = shift.get("assignedUserIds") or []
         job_id   = shift.get("jobId")
 
+        notified = load_shift_notified()
         for uid in assigned:
             if uid in OBSERVER_IDS:
                 continue
-            key = (uid, shift_id)
-            if key in _shift_notified:
+            key = f"{uid}_{shift_id}"
+            if key in notified:
                 continue
-            _shift_notified.add(key)
+            notified[key] = time.time()
+            save_shift_notified(notified)
             try:
                 _run_shift_end_check(uid, job_id, end_ts, shift)
             except Exception as e:
