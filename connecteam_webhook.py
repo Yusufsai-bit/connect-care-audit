@@ -1071,23 +1071,22 @@ class WebhookHandler(BaseHTTPRequestHandler):
         _log_event(event, data)
         print(f"Event: {event}  keys={list(data.keys()) if isinstance(data, dict) else '?'}")
 
-        if event in ("timeActivityClockIn", "Time activity clock in"):
+        el = event.lower()
+        if event in ("timeActivityClockIn", "Time activity clock in") or el == "clock_in":
             handle_clock_in(data)
-        elif event in ("timeActivityClockOut", "Time activity clock out"):
+        elif event in ("timeActivityClockOut", "Time activity clock out") or el == "clock_out":
             handle_clock_out(data)
-        elif event in ("timeActivityAutoClockOut", "Time activity auto clock out"):
+        elif event in ("timeActivityAutoClockOut", "Time activity auto clock out") or el == "auto_clock_out":
             handle_auto_clock_out(data)
-        elif event in ("timeActivityAdminEdit", "Time activity admin edit"):
+        elif event in ("timeActivityAdminEdit", "Time activity admin edit", "timeActivityAdminAdd", "Time activity admin add") or el in ("admin_edit", "admin_add", "admin_delete"):
             handle_admin_time_edit(data)
-        elif event in ("timeActivityAdminAdd", "Time activity admin add"):
-            handle_admin_time_edit(data)  # same handler — both are admin time changes
-        elif event in ("chatMessageCreated", "Chat message created"):
+        elif event in ("chatMessageCreated", "Chat message created") or el == "chat_message_created":
             handle_chat_reply(data)
-        elif event in ("formSubmission", "Form Submission"):
+        elif event in ("formSubmission", "Form Submission") or el == "form_submission":
             handle_form_submitted(data)
-        elif "shift" in event.lower():
+        elif "shift" in el:
             handle_shift_change(event, data)
-        elif "user" in event.lower() and event.lower() not in ("chatmessagecreated",):
+        elif "user" in el and el not in ("chatmessagecreated", "chat_message_created"):
             handle_user_change(event, data)
 
         self.send_response(200)
