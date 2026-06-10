@@ -123,6 +123,11 @@ def save_shift_notified(mapping):
 # Loaded from disk on startup so it survives Railway restarts.
 PENDING_RELAY_QUEUE = load_pending_relay()
 
+# Message-ID dedup ring buffer — prevents processing the same event twice when
+# Connecteam retries on timeout (entries expire after 1 hour).
+_SEEN_IDS: dict = {}
+_SEEN_LOCK = threading.Lock()
+
 AMY_MEMORY_FILE = os.path.join(os.path.dirname(__file__) or ".", "amy_conversation_log.json")
 
 
@@ -142,13 +147,23 @@ def save_amy_memory(memory):
         pass
 
 
-def get_last_amy_message(user_id):
-    return load_amy_memory().get(str(user_id), "")
-
-
-def set_last_amy_message(user_id, text):
+def get_conversation_history(user_id, n=8):
+    """Return last n turns as list of {role, text, ts} dicts."""
     memory = load_amy_memory()
-    memory[str(user_id)] = text
+    hist = memory.get(str(user_id), [])
+    if isinstance(hist, str):
+        hist = [{"role": "amy", "text": hist, "ts": ""}] if hist else []
+    return hist[-n:]
+
+
+def append_to_conversation(user_id, role, text):
+    """Append a turn to this worker's conversation history (cap at 20 entries)."""
+    memory = load_amy_memory()
+    hist = memory.get(str(user_id), [])
+    if isinstance(hist, str):
+        hist = [{"role": "amy", "text": hist, "ts": ""}] if hist else []
+    hist.append({"role": role, "text": text[:500], "ts": datetime.datetime.now(AEST).strftime("%d %b %H:%M")})
+    memory[str(user_id)] = hist[-20:]
     save_amy_memory(memory)
 
 # ── Notification log helpers ──────────────────────────────────────────────────
@@ -212,7 +227,6 @@ def mark_acknowledged(user_id):
             n["status"]          = "Acknowledged"
             n["acknowledged_at"] = datetime.datetime.now().strftime("%d %b %Y, %I:%M %p")
             changed = True
-            break
     if changed:
         save_notifications(notifs)
     return changed
@@ -578,7 +592,7 @@ def handle_clock_out(data):
 
     sent = send_connecteam_chat(user_id, msg)
     if sent:
-        set_last_amy_message(user_id, msg)
+        append_to_conversation(user_id, "amy", msg)
     else:
         phone = get_worker_phone(user_id)
         if phone:
@@ -660,66 +674,82 @@ def _call_claude(prompt, max_tokens=300):
             max_tokens=max_tokens,
             messages=[{"role": "user", "content": prompt}],
         )
+        import re as _re
         raw = response.content[0].text.strip()
-        if raw.startswith("```"):
-            raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+        if "```" in raw:
+            raw = _re.sub(r"```(?:json)?\n?", "", raw).strip()
         return raw
     except Exception as e:
         print(f"  [WARN] Claude call failed: {e}")
         return None
 
 
-def generate_amy_reply(worker_name, text, issues, verification="", previous_amy_msg=""):
+def generate_amy_reply(worker_name, text, issues, verification="", history=None):
     """
-    Classify the worker's message and generate Amy's reply.
+    Classify worker message and generate Amy's reply.
+    history: list of {role: "amy"|"worker", text, ts} dicts (last 8 turns)
     Returns (is_complex: bool, reply_text: str).
     """
+    import re as _re
     first = worker_name.split()[0]
 
     if not ANTHROPIC_API_KEY:
-        return False, f"Thanks {first}, noted — I'll be in touch if anything else is needed."
+        return False, f"Hey {first}, got your message — I'll be in touch."
 
     issues_summary = "\n".join(
         f"- [{i.get('Severity','?')}] {i.get('Issue','?')}: {i.get('Detail','')[:100]}"
         for i in (issues or [])[:5]
     ) or "No open compliance issues."
 
-    verification_line   = f"\nVerification check: {verification}" if verification else ""
-    prior_line          = f"\nYour last message to them: \"{previous_amy_msg}\"" if previous_amy_msg else ""
+    history_lines = ""
+    if history:
+        for turn in history[-6:]:
+            label = "Amy" if turn["role"] == "amy" else first
+            history_lines += f"{label}: {turn['text']}\n"
 
-    prompt = f"""You are Amy, a coordinator at Connect Care. You're messaging a support worker on a work chat app.
+    verif_line = f"\nVerification result: {verification}" if verification else ""
 
-Worker: {worker_name}
-Their compliance issues:
-{issues_summary}{verification_line}{prior_line}
+    prompt = f"""You are Amy, a support coordinator at Connect Care in Melbourne. You're texting {first} on a work chat app about their NDIS shifts.
 
-Their message:
-"{text}"
+Their open compliance issues:
+{issues_summary}
 
-Decide:
-- SIMPLE: they've sorted it, explained it, or it doesn't need escalating
-- COMPLEX: they're asking something, pushing back, or it needs a management call
+{f"Recent conversation:{chr(10)}{history_lines}" if history_lines else ""}
+{first} just said: "{text}"{verif_line}
 
-If SIMPLE: reply naturally, continuing from where the conversation left off. Casual, warm, brief. Max 2 sentences. Don't say "noted", "acknowledged", "I've logged this", "confirmed" or anything corporate. If verification shows notes are there, say something like "all good, can see them now". If notes aren't there yet, say "can't see them just yet — can you double check they saved properly?"
-If COMPLEX: something like "Thanks [first name], leave it with me and I'll come back to you" — natural, not robotic.
+Decide: SIMPLE (you can handle it — they explained, sorted, or it's minor) or COMPLEX (needs a manager, they're disputing something, needs investigation).
 
-JSON only — no extra text:
-{{"is_complex": true/false, "reply": "..."}}
+Write Amy's reply. Non-negotiable rules:
+- Sound like a real person texting, not a compliance system. Casual, warm, direct.
+- NEVER use these words/phrases: noted, acknowledged, please note, please be advised, I need you to, ensure that, outstanding issues, at your earliest convenience, flagged, I have logged, this matter, please ensure, going forward, action this, your attention, I will escalate
+- NO bullet points, NO numbered lists
+- If this isn't the first message (check history), don't open with "Hi {first}" — vary your opener
+- Max 2 sentences. Get to the point.
+- If notes verified present: "yeah can see them now, all good" style
+- If notes not found yet: "can't see them yet — did they save properly?" style
+- If COMPLEX: "leave it with me, I'll sort it out" NOT "I will escalate this to management"
+- If worker is asking something unrelated to compliance (shift swaps, leave etc): classify COMPLEX
 
-Important: sound like a real person texting, not a corporate system. No buzzwords, no formality."""
+JSON only — no other text:
+{{"is_complex": true/false, "reply": "..."}}"""
 
-    raw = _call_claude(prompt)
+    raw = _call_claude(prompt, max_tokens=500)
     if not raw:
-        return False, f"Thanks {first}, noted — I'll follow up if anything else is needed."
+        return False, f"Hey {first}, got it — I'll be in touch."
     try:
-        result = json.loads(raw)
+        clean = raw.strip()
+        if "```" in clean:
+            clean = _re.sub(r"```(?:json)?", "", clean).strip()
+        result = json.loads(clean)
         reply = result.get("reply") or ""
         if not reply:
-            # Claude returned valid JSON but omitted the reply — use a safe fallback
-            return False, f"Thanks {first}, noted — I'll be in touch."
+            return False, f"Hey {first}, got it."
         return result.get("is_complex", False), reply
     except Exception:
-        return False, f"Thanks {first}, noted."
+        m = _re.search(r'"reply"\s*:\s*"([^"]+)"', raw)
+        if m:
+            return False, m.group(1)
+        return False, f"Hey {first}, got it."
 
 
 def compose_from_guidance(worker_name, manager_guidance, original_reply, issues):
@@ -776,12 +806,21 @@ def handle_chat_reply(data):
     # ── Manager guidance in CC Management → compose and send to worker ────────
     if conv_id == CC_MGMT_CONV_ID and uid in OBSERVER_IDS:
         if PENDING_RELAY_QUEUE:
-            relay    = PENDING_RELAY_QUEUE.pop(0)
+            # Try to match which worker the manager is replying about by name mention
+            text_lower = text.lower()
+            matched_idx = 0  # default to oldest
+            for i, r in enumerate(PENDING_RELAY_QUEUE):
+                first_name = r["worker_name"].split()[0].lower()
+                if first_name in text_lower:
+                    matched_idx = i
+                    break
+            relay = PENDING_RELAY_QUEUE.pop(matched_idx)
             save_pending_relay(PENDING_RELAY_QUEUE)
             wid      = relay["worker_id"]
             wname    = relay["worker_name"]
             composed = compose_from_guidance(wname, text, relay["reply"], relay.get("issues", []))
             send_connecteam_chat(wid, composed)
+            append_to_conversation(wid, "amy", composed)
             print(f"  Amy sent composed response to {wname} based on manager guidance")
             if PENDING_RELAY_QUEUE:
                 _post_to_cc_mgmt(PENDING_RELAY_QUEUE[0])
@@ -800,9 +839,10 @@ def handle_chat_reply(data):
         print(f"  Verification: {verification}")
 
     # ── Generate Amy's reply ───────────────────────────────────────────────────
-    issues          = get_worker_issues(user_id)
-    prior_msg       = get_last_amy_message(user_id)
-    is_complex, amy_reply = generate_amy_reply(worker, text, issues, verification, prior_msg)
+    issues   = get_worker_issues(user_id)
+    history  = get_conversation_history(user_id)
+    append_to_conversation(user_id, "worker", text)
+    is_complex, amy_reply = generate_amy_reply(worker, text, issues, verification, history)
 
     # Only acknowledge if the worker is actually responding to a compliance issue —
     # not for unrelated messages like shift-swap requests (those get classified complex).
@@ -811,7 +851,7 @@ def handle_chat_reply(data):
 
     if amy_reply and SENDER_ID and CT_KEY:
         send_connecteam_chat(user_id, amy_reply)
-        set_last_amy_message(user_id, amy_reply)
+        append_to_conversation(user_id, "amy", amy_reply)
         print(f"  Amy replied ({'holding' if is_complex else 'resolved'}): '{amy_reply[:80]}'")
 
     # ── Complex → ask CC Management what to say ───────────────────────────────
@@ -971,7 +1011,7 @@ def _run_shift_end_check(user_id, job_id, sched_end_ts, shift):
     msg = _generate_shift_end_msg(first, client_name, flags)
     sent = send_connecteam_chat(user_id, msg)
     if sent:
-        set_last_amy_message(user_id, msg)
+        append_to_conversation(user_id, "amy", msg)
     print(f"[shift-check] notified {worker_name}: {flags}")
     return True
 
@@ -982,11 +1022,14 @@ def _generate_shift_end_msg(first_name, client_name, flags):
     if not ANTHROPIC_API_KEY:
         return f"Hey {first_name}, just checking on your shift at {client_name} — {issues_desc}. Can you sort that when you get a chance?"
 
-    prompt = f"""You are Amy, a coordinator at Connect Care. You need to follow up with a support worker called {first_name} about their shift at {client_name}.
+    prompt = f"""You are Amy, a support coordinator at Connect Care. Text {first_name} about their shift at {client_name}.
 
 Issue(s): {issues_desc}
 
-Write a casual, natural follow-up text message. Sound like a real person — not a system, not corporate. Keep it brief (2 sentences max). No emojis. Don't start with "Hi" or "Hey" every time — vary your opening. Just the message, nothing else."""
+Write a casual, natural follow-up — like a real person texting a colleague. 2 sentences max.
+Rules: no bullet points, no "please note", no "outstanding", no "ensure", no "I need you to".
+Don't open with "Hi" every time. Vary your opener. Sound human.
+Just the message, nothing else."""
 
     result = _call_claude(prompt)
     return result or f"Hey {first_name}, just a quick one — {issues_desc} for {client_name}. Can you jump on that?"
@@ -1008,6 +1051,44 @@ def _log_event(event, data, raw_body=None):
     with _EVENT_LOG_LOCK:
         _EVENT_LOG.insert(0, entry)
         del _EVENT_LOG[30:]
+
+
+def _process_event(payload):
+    event = payload.get("eventType", "")
+    data  = payload.get("data", {})
+
+    # Dedup — Connecteam retries on timeout; don't process the same event twice
+    msg_id = str(data.get("messageId") or data.get("id") or "")
+    if msg_id:
+        with _SEEN_LOCK:
+            if msg_id in _SEEN_IDS:
+                return
+            _SEEN_IDS[msg_id] = time.time()
+            cutoff = time.time() - 3600
+            for k in list(_SEEN_IDS):
+                if _SEEN_IDS[k] < cutoff:
+                    del _SEEN_IDS[k]
+
+    _log_event(event, data)
+    print(f"Event: {event}  keys={list(data.keys()) if isinstance(data, dict) else '?'}")
+
+    el = event.lower()
+    if event in ("timeActivityClockIn", "Time activity clock in") or el == "clock_in":
+        handle_clock_in(data)
+    elif event in ("timeActivityClockOut", "Time activity clock out") or el == "clock_out":
+        handle_clock_out(data)
+    elif event in ("timeActivityAutoClockOut", "Time activity auto clock out") or el == "auto_clock_out":
+        handle_auto_clock_out(data)
+    elif event in ("timeActivityAdminEdit", "Time activity admin edit", "timeActivityAdminAdd", "Time activity admin add") or el in ("admin_edit", "admin_add", "admin_delete"):
+        handle_admin_time_edit(data)
+    elif event in ("chatMessageCreated", "Chat message created") or el == "chat_message_created":
+        handle_chat_reply(data)
+    elif event in ("formSubmission", "Form Submission") or el == "form_submission":
+        handle_form_submitted(data)
+    elif "shift" in el:
+        handle_shift_change(event, data)
+    elif "user" in el and el not in ("chatmessagecreated", "chat_message_created"):
+        handle_user_change(event, data)
 
 
 # ── HTTP Server ───────────────────────────────────────────────────────────────
@@ -1048,8 +1129,8 @@ class WebhookHandler(BaseHTTPRequestHandler):
         self.wfile.write(b"Connect Care webhook receiver - running.")
 
     def do_POST(self):
-        length = int(self.headers.get("Content-Length", 0))
-        body   = self.rfile.read(length)
+        length  = int(self.headers.get("Content-Length", 0))
+        body    = self.rfile.read(length)
 
         if WEBHOOK_SECRET:
             sig      = self.headers.get("X-Connecteam-Signature", "")
@@ -1066,32 +1147,12 @@ class WebhookHandler(BaseHTTPRequestHandler):
             self.end_headers()
             return
 
-        event = payload.get("eventType", "")
-        data  = payload.get("data", {})
-        _log_event(event, data)
-        print(f"Event: {event}  keys={list(data.keys()) if isinstance(data, dict) else '?'}")
-
-        el = event.lower()
-        if event in ("timeActivityClockIn", "Time activity clock in") or el == "clock_in":
-            handle_clock_in(data)
-        elif event in ("timeActivityClockOut", "Time activity clock out") or el == "clock_out":
-            handle_clock_out(data)
-        elif event in ("timeActivityAutoClockOut", "Time activity auto clock out") or el == "auto_clock_out":
-            handle_auto_clock_out(data)
-        elif event in ("timeActivityAdminEdit", "Time activity admin edit", "timeActivityAdminAdd", "Time activity admin add") or el in ("admin_edit", "admin_add", "admin_delete"):
-            handle_admin_time_edit(data)
-        elif event in ("chatMessageCreated", "Chat message created") or el == "chat_message_created":
-            handle_chat_reply(data)
-        elif event in ("formSubmission", "Form Submission") or el == "form_submission":
-            handle_form_submitted(data)
-        elif "shift" in el:
-            handle_shift_change(event, data)
-        elif "user" in el and el not in ("chatmessagecreated", "chat_message_created"):
-            handle_user_change(event, data)
-
+        # Respond immediately — Claude calls can take 5-15s and Connecteam retries on timeout
         self.send_response(200)
         self.end_headers()
         self.wfile.write(b"OK")
+
+        threading.Thread(target=_process_event, args=(payload,), daemon=True).start()
 
 
 if __name__ == "__main__":
