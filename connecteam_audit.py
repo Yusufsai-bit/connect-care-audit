@@ -739,10 +739,11 @@ def send_worker_message(user_id, text, worker_name=None):
             f"/chat/v1/conversations/{conv_id}/message",
             {"senderId": CONNECTEAM_SENDER_ID, "text": text[:4000]},
         )
-        if not ok:
-            return False, result
-        msg_id = (result.get("data") or {}).get("messageId") or result.get("messageId")
-        return True, msg_id
+        if ok:
+            msg_id = (result.get("data") or {}).get("messageId") or result.get("messageId")
+            return True, msg_id
+        # Group conv failed (stale ID, deleted group, etc.) — fall through to private message
+        print(f"[WARN] Group conv {conv_id} failed for user {user_id}: {result} — falling back to private message")
 
     # Fallback: private message to worker + separate CC to each observer
     ok, result = ct_post(
