@@ -333,18 +333,15 @@ if not st.session_state.get("authenticated"):
 
 # ── Data loaders ──────────────────────────────────────────────────────────────
 
-@st.cache_data(ttl=300, show_spinner=False)
-def load_audit(days_back: int):
-    issues = run_audit(days_back)
+_AUDIT_DAYS = 45  # always load 45 days — stable cache key, filters applied client-side
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def load_audit():
+    issues = run_audit(_AUDIT_DAYS)
     fetched_at = datetime.datetime.now().strftime("%d %b %Y, %I:%M %p")
     return issues, fetched_at
 
-@st.cache_data(ttl=300, show_spinner=False)
-def load_prev_count(days_back: int):
-    issues = run_audit(days_back * 2)
-    return len(issues)
-
-@st.cache_data(ttl=600, show_spinner=False)
+@st.cache_data(ttl=3600, show_spinner=False)
 def load_worker_contacts():
     try:
         users = fetch_all_users()
@@ -359,7 +356,7 @@ def load_worker_contacts():
     except Exception:
         return {}
 
-@st.cache_data(ttl=600, show_spinner=False)
+@st.cache_data(ttl=3600, show_spinner=False)
 def load_task_boards():
     try:
         boards = fetch_task_boards()
@@ -370,7 +367,7 @@ def load_task_boards():
     except Exception:
         return {}
 
-@st.cache_data(ttl=600, show_spinner=False)
+@st.cache_data(ttl=3600, show_spinner=False)
 def load_staff_names():
     try:
         users = fetch_all_users()
@@ -524,19 +521,13 @@ with st.sidebar:
     else:
         _, start_date, end_date = next(c for c in cycles if c[0] == period_choice)
 
-    # Load enough history to cover the period
-    days_back = max((today - start_date).days + 1, 1)
-
-    compare_prev = st.checkbox("Compare with previous period", value=False)
-
     st.markdown("<br>", unsafe_allow_html=True)
     if st.button("🔄  Refresh Data", use_container_width=True, type="primary"):
         st.cache_data.clear()
         st.rerun()
 
     with st.spinner("Loading…"):
-        all_issues, fetched_at = load_audit(days_back)
-        prev_total = load_prev_count(days_back) if compare_prev else None
+        all_issues, fetched_at = load_audit()
 
     st.markdown(f"<small style='color:#888'>Last updated<br>{fetched_at}</small>",
                 unsafe_allow_html=True)
@@ -590,14 +581,6 @@ n_high     = counts.get("HIGH", 0)
 n_medium   = counts.get("MEDIUM", 0)
 n_total    = len(df_all)
 
-def period_delta(count, prev_total):
-    if prev_total is None:
-        return ""
-    est_prev = prev_total - len(df_raw)
-    diff = count - round(est_prev * count / max(len(df_raw), 1))
-    if diff > 0:   return f'<div class="metric-delta delta-up">▲ {diff} vs prev</div>'
-    elif diff < 0: return f'<div class="metric-delta delta-down">▼ {abs(diff)} vs prev</div>'
-    else:          return f'<div class="metric-delta delta-same">— same as prev</div>'
 
 # ── Header ────────────────────────────────────────────────────────────────────
 
@@ -621,7 +604,7 @@ for col, cls, colour, label, count in [
         f'<div class="metric-card {cls}">'
         f'<div class="metric-number" style="color:{colour}">{count}</div>'
         f'<div class="metric-label">{label}</div>'
-        f'{period_delta(count, prev_total)}</div>',
+        f'</div>',
         unsafe_allow_html=True)
 
 st.markdown("<br>", unsafe_allow_html=True)
