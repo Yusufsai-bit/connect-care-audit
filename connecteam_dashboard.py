@@ -206,9 +206,8 @@ if not st.session_state.get("authenticated"):
 _AUDIT_DAYS = 45
 
 @st.cache_data(ttl=1800, show_spinner=False)
-def load_audit():
-    issues = run_audit(_AUDIT_DAYS)
-    return issues, datetime.datetime.now().strftime("%d %b %Y, %I:%M %p")
+def _fetch_audit():
+    return run_audit(_AUDIT_DAYS)
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def _load_contacts_raw():
@@ -258,26 +257,43 @@ with st.sidebar:
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    if st.button("🔄 Refresh", use_container_width=True, type="primary"):
-        st.cache_data.clear()
+    if st.button("▶  Run Audit", use_container_width=True, type="primary"):
+        _fetch_audit.clear()
         if "contacts" in st.session_state: del st.session_state["contacts"]
+        with st.spinner("Running audit… (~10s)"):
+            issues = _fetch_audit()
+        st.session_state.audit_issues   = issues
+        st.session_state.audit_ran_at   = datetime.datetime.now().strftime("%d %b %Y, %I:%M %p")
         st.rerun()
 
-    with st.spinner("Loading data…"):
-        all_issues, fetched_at = load_audit()
+    ran_at = st.session_state.get("audit_ran_at")
+    if ran_at:
+        st.markdown(f"<small style='color:#aaa'>Last audit: {ran_at}</small>", unsafe_allow_html=True)
+    else:
+        st.markdown("<small style='color:#aaa'>No audit run yet</small>", unsafe_allow_html=True)
 
-    st.markdown(f"<small style='color:#aaa'>Updated {fetched_at}</small>", unsafe_allow_html=True)
     st.divider()
     if st.button("Sign out", use_container_width=True):
         st.session_state.authenticated = False
         st.rerun()
 
+all_issues = st.session_state.get("audit_issues")
+
 # ── Build dataframe ───────────────────────────────────────────────────────────
 
 _init_notifs()
 
+if all_issues is None:
+    st.markdown("<br><br>", unsafe_allow_html=True)
+    _, col, _ = st.columns([1, 2, 1])
+    with col:
+        st.markdown("### 🛡️ Connect Care Compliance")
+        st.markdown("Click **▶ Run Audit** in the sidebar to load shift data from Connecteam.")
+        st.markdown("<small style='color:#aaa'>First run takes ~10 seconds. Results stay loaded for 30 minutes.</small>", unsafe_allow_html=True)
+    st.stop()
+
 if not all_issues:
-    st.success("✅ No compliance issues found.")
+    st.success("✅ No compliance issues found for this period.")
     st.stop()
 
 df_raw = pd.DataFrame([
