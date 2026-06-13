@@ -203,7 +203,33 @@ if not st.session_state.get("authenticated"):
 
 # ── Data loaders ──────────────────────────────────────────────────────────────
 
-_AUDIT_DAYS = 45
+_AUDIT_DAYS      = 45
+_AUDIT_CACHE_FILE = os.path.join(os.path.dirname(__file__), "audit_cache.json")
+
+def _save_audit_cache(issues, ran_at):
+    try:
+        data = {
+            "ran_at": ran_at,
+            "issues": [
+                {"severity": i.severity, "category": i.category, "worker": i.worker,
+                 "client": i.client or "", "date": i.date or "", "detail": i.detail or ""}
+                for i in issues
+            ],
+        }
+        with open(_AUDIT_CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+    except Exception:
+        pass
+
+def _load_audit_cache():
+    try:
+        with open(_AUDIT_CACHE_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        from types import SimpleNamespace
+        issues = [SimpleNamespace(**d) for d in data["issues"]]
+        return issues, data["ran_at"]
+    except Exception:
+        return None, None
 
 @st.cache_data(ttl=1800, show_spinner=False)
 def _fetch_audit():
@@ -226,6 +252,13 @@ def get_contacts():
     if "contacts" not in st.session_state:
         st.session_state.contacts = _load_contacts_raw()
     return st.session_state.contacts
+
+# Load last audit from disk if this is a fresh session
+if "audit_issues" not in st.session_state:
+    _cached_issues, _cached_ran_at = _load_audit_cache()
+    if _cached_issues is not None:
+        st.session_state.audit_issues = _cached_issues
+        st.session_state.audit_ran_at = _cached_ran_at
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 
@@ -262,8 +295,10 @@ with st.sidebar:
         if "contacts" in st.session_state: del st.session_state["contacts"]
         with st.spinner("Running audit… (~10s)"):
             issues = _fetch_audit()
-        st.session_state.audit_issues   = issues
-        st.session_state.audit_ran_at   = datetime.datetime.now().strftime("%d %b %Y, %I:%M %p")
+        ran_at = datetime.datetime.now().strftime("%d %b %Y, %I:%M %p")
+        st.session_state.audit_issues = issues
+        st.session_state.audit_ran_at = ran_at
+        _save_audit_cache(issues, ran_at)
         st.rerun()
 
     ran_at = st.session_state.get("audit_ran_at")
