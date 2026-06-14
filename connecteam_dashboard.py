@@ -293,7 +293,7 @@ with st.sidebar:
     if st.button("▶  Run Audit", use_container_width=True, type="primary"):
         _fetch_audit.clear()
         if "contacts" in st.session_state: del st.session_state["contacts"]
-        with st.spinner("Running audit… (~10s)"):
+        with st.spinner("Running audit… (~20 seconds)"):
             issues = _fetch_audit()
         ran_at = datetime.datetime.now().strftime("%d %b %Y, %I:%M %p")
         st.session_state.audit_issues = issues

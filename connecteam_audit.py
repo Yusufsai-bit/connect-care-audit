@@ -12,7 +12,7 @@ Environment variables required:
     ANTHROPIC_API_KEY    -- Anthropic API key (for note quality assessment)
 """
 
-import os, sys, json, re, math, time, random, concurrent.futures
+import os, sys, json, re, math, time, random, concurrent.futures, functools
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 import requests
 from datetime import datetime, timezone, timedelta
@@ -197,10 +197,16 @@ def fetch_time_activities(start_date, end_date):
     return by_user
 
 
+_FORM_SUBS_CACHE: dict = {}  # pre-populated at start of run_audit
+
 def fetch_form_submissions(form_id):
+    if form_id in _FORM_SUBS_CACHE:
+        return _FORM_SUBS_CACHE[form_id]
     try:
         data = ct_get(f"/forms/v1/forms/{form_id}/form-submissions", {"limit": 100})
-        return data["data"]["formSubmissions"]
+        result = data["data"]["formSubmissions"]
+        _FORM_SUBS_CACHE[form_id] = result
+        return result
     except Exception:
         return []
 
@@ -304,6 +310,7 @@ def fetch_onboarding_completion(active_user_ids):
     return dict(result)
 
 
+@functools.lru_cache(maxsize=1)
 def fetch_user_custom_fields():
     """Fetch custom field definitions. Exported for dashboard use."""
     try:
@@ -489,6 +496,7 @@ def auto_detect_ids():
     return detected
 
 
+@functools.lru_cache(maxsize=4)
 def fetch_timesheet(start_date, end_date):
     """Payroll/billing totals per worker with pay rates. Max 45-day window."""
     d = ct_get(
@@ -1004,8 +1012,14 @@ def run_audit(days_back=7):
     print(f"\nNDIS Compliance Audit -- {start_dt.strftime('%d %b')} to {now.strftime('%d %b %Y')}")
     print("Fetching data from Connecteam (parallel)...")
 
-    # Fire all independent fetches concurrently — cuts ~20s of serial API calls to ~4s
-    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as _pool:
+    # Clear per-run caches so stale data is never used
+    _FORM_SUBS_CACHE.clear()
+    fetch_user_custom_fields.cache_clear()
+    fetch_timesheet.cache_clear()
+
+    # Fire ALL independent fetches concurrently in one batch:
+    # core data + forms (×11) + timesheet + custom fields
+    with concurrent.futures.ThreadPoolExecutor(max_workers=24) as _pool:
         _f_users   = _pool.submit(fetch_all_users)
         _f_jobs    = _pool.submit(fetch_all_jobs)
         _f_shifts  = _pool.submit(fetch_scheduled_shifts, start_ts, end_ts)
@@ -1014,6 +1028,9 @@ def run_audit(days_back=7):
         _f_breaks  = _pool.submit(fetch_manual_breaks, start_date, end_date)
         _f_unavail = _pool.submit(fetch_user_unavailabilities, start_ts, end_ts)
         _f_layers  = _pool.submit(fetch_shift_layers)
+        _f_time    = _pool.submit(fetch_timesheet, start_date, end_date)
+        _f_cf      = _pool.submit(fetch_user_custom_fields)
+        _f_forms   = {fid: _pool.submit(fetch_form_submissions, fid) for fid in FORMS.values()}
 
         users              = _f_users.result()
         jobs               = _f_jobs.result()
@@ -1023,8 +1040,13 @@ def run_audit(days_back=7):
         breaks_by_activity = _f_breaks.result()
         unavailabilities   = _f_unavail.result()
         _layers_raw        = _f_layers.result()
+        _f_time.result()   # warms lru_cache — later call in Section 9 is instant
+        _f_cf.result()     # warms lru_cache — later call in Section 8 (credentials) is instant
+        for fid, fut in _f_forms.items():
+            try:    _FORM_SUBS_CACHE[fid] = fut.result()
+            except: _FORM_SUBS_CACHE[fid] = []
 
-    # Onboarding needs user IDs (must come after users fetch)
+    # Onboarding needs active_user_ids — only remaining serial fetch
     active_user_ids = set(users.keys())
     onboarding_gaps = fetch_onboarding_completion(active_user_ids)
 
