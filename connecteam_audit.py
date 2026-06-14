@@ -12,7 +12,7 @@ Environment variables required:
     ANTHROPIC_API_KEY    -- Anthropic API key (for note quality assessment)
 """
 
-import os, sys, json, re, math, time, random, concurrent.futures, functools
+import os, sys, json, re, math, time, random, concurrent.futures, functools, hashlib
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 import requests
 from datetime import datetime, timezone, timedelta
@@ -138,18 +138,24 @@ class Issue:
 # ---------------------------------------------
 
 def ct_get(path, params=None):
-    for attempt in range(3):
-        r = requests.get(
-            f"{BASE_URL}{path}",
-            headers={"X-API-KEY": CONNECTEAM_API_KEY, "Accept": "application/json"},
-            params=params,
-            timeout=30,
-        )
-        if r.status_code == 429:
-            time.sleep(2 ** attempt)
-            continue
-        r.raise_for_status()
-        return r.json()
+    for attempt in range(4):
+        try:
+            r = requests.get(
+                f"{BASE_URL}{path}",
+                headers={"X-API-KEY": CONNECTEAM_API_KEY, "Accept": "application/json"},
+                params=params,
+                timeout=30,
+            )
+            if r.status_code == 429:
+                time.sleep(2 ** attempt)
+                continue
+            r.raise_for_status()
+            return r.json()
+        except requests.exceptions.SSLError:
+            if attempt < 3:
+                time.sleep(1 + attempt)
+                continue
+            raise
     r.raise_for_status()
     return r.json()
 
@@ -919,6 +925,28 @@ def is_overnight(start_ts, end_ts):
 # CLAUDE NOTE QUALITY ASSESSMENT
 # ---------------------------------------------
 
+_NOTE_CACHE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "note_assessment_cache.json")
+_note_cache: dict = {}
+
+def _load_note_cache():
+    global _note_cache
+    try:
+        with open(_NOTE_CACHE_FILE, "r", encoding="utf-8") as f:
+            _note_cache = json.load(f)
+    except Exception:
+        _note_cache = {}
+
+def _save_note_cache():
+    try:
+        with open(_NOTE_CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(_note_cache, f)
+    except Exception:
+        pass
+
+def _note_hash(text: str) -> str:
+    return hashlib.md5(text.encode("utf-8", errors="ignore")).hexdigest()
+
+
 def assess_notes_with_claude(notes_batch):
     """
     Evaluate a batch of shift notes against NDIS standards.
@@ -1397,13 +1425,40 @@ def run_audit(days_back=7):
     # -- Claude batch assessment --
     if notes_for_claude:
         if ANTHROPIC_API_KEY:
-            print(f"Assessing {len(notes_for_claude)} notes with Claude AI...")
-            batch_size    = 10
-            claude_results = {}
-            for i in range(0, len(notes_for_claude), batch_size):
-                batch   = notes_for_claude[i:i + batch_size]
-                results = assess_notes_with_claude(batch)
-                claude_results.update(results)
+            _load_note_cache()
+
+            # Separate cached vs uncached notes
+            cached_results: dict = {}
+            uncached: list = []
+            for n in notes_for_claude:
+                h = _note_hash(n["text"])
+                n["_hash"] = h
+                if h in _note_cache:
+                    cached_results[n["id"]] = _note_cache[h]
+                else:
+                    uncached.append(n)
+
+            print(f"Assessing {len(uncached)} notes with Claude AI"
+                  f" ({len(cached_results)} cached, skipped)...")
+
+            # Parallel batch calls for uncached notes
+            batch_size = 10
+            batches = [uncached[i:i + batch_size] for i in range(0, len(uncached), batch_size)]
+            new_results: dict = {}
+            if batches:
+                max_w = min(len(batches), 15)
+                with concurrent.futures.ThreadPoolExecutor(max_workers=max_w) as _apool:
+                    futs = [_apool.submit(assess_notes_with_claude, b) for b in batches]
+                    for fut in concurrent.futures.as_completed(futs):
+                        new_results.update(fut.result())
+
+            # Persist newly assessed notes to cache
+            for n in uncached:
+                if n["id"] in new_results:
+                    _note_cache[n["_hash"]] = new_results[n["id"]]
+            _save_note_cache()
+
+            claude_results = {**cached_results, **new_results}
 
             for nid, a in claude_results.items():
                 if nid not in note_map:
