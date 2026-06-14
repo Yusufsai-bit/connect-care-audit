@@ -2,4 +2,6 @@
 __pycache__/
 *.pyc
 .env
+note_assessment_cache.json
+audit_cache.json
 # worker_conversations.json is intentionally committed — needed by GitHub Actions
