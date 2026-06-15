@@ -744,9 +744,12 @@ async def handle_webhook(request: Request):
         return JSONResponse({"status": "ignored"})
 
     data         = payload.get("data", {})
-    sender_id    = str(data.get("senderId") or data.get("userId") or data.get("senderUserId") or "")
-    conv_id      = str(data.get("conversationId") or data.get("conversation_id") or "")
-    message_text = str(data.get("text") or data.get("content") or data.get("message") or "").strip()
+    # Connecteam wraps the message object under data.message for chat events
+    msg          = (data.get("message") if isinstance(data.get("message"), dict) else None) or data
+    sender_id    = str(msg.get("senderId") or msg.get("userId") or msg.get("senderUserId") or "")
+    conv_id      = str(msg.get("conversationId") or msg.get("conversation_id") or data.get("conversationId") or "")
+    message_text = str(msg.get("content") or msg.get("text") or "").strip()
+    logger.info(f"Parsed: sender={sender_id} conv={conv_id} text={message_text[:60]}")
 
     if sender_id == str(CONNECTEAM_SENDER_ID):
         return JSONResponse({"status": "self_message"})
