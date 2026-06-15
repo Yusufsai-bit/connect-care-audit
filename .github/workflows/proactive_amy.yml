@@ -1,0 +1,50 @@
+name: Proactive Amy — Daily Shift Prep
+
+on:
+  schedule:
+    # 8:00 AM AEST = 10:00 PM UTC (previous day)
+    - cron: "0 22 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: proactive-amy
+  cancel-in-progress: false
+
+jobs:
+  proactive-amy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run Proactive Amy
+        env:
+          CONNECTEAM_API_KEY:   ${{ secrets.CONNECTEAM_API_KEY }}
+          CONNECTEAM_SENDER_ID: ${{ secrets.CONNECTEAM_SENDER_ID }}
+          ANTHROPIC_API_KEY:    ${{ secrets.ANTHROPIC_API_KEY }}
+          CC_MGMT_CONV_ID:      ${{ secrets.CC_MGMT_CONV_ID }}
+          GITHUB_TOKEN:         ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPO:          ${{ github.repository }}
+        run: python proactive_amy.py
+
+      - name: Commit shift prep dedup state
+        run: |
+          git config user.name  "Connect Care Bot"
+          git config user.email "bot@connectcare.com.au"
+          git add shift_prep_notified.json
+          git diff --cached --quiet || git commit -m "chore: update shift prep dedup $(date +'%Y-%m-%d') [skip ci]"
+          git pull --rebase origin main
+          git push
