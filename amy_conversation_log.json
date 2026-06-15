@@ -1,1 +1,79 @@
-{}
+{
+  "3127758": {
+    "worker_name": "Abdi Rahman",
+    "conversation_id": "a05d56fc-b214-42cb-b969-579620bca27c",
+    "messages": [
+      {
+        "sender": "amy",
+        "text": "Hi Abdi, just flagged something from Sunday at Kallan's \u2014 you didn't clock in for either of your shifts that day (the 15:00\u201321:00 and the 21:00\u201309:00). Can you let me know what happened? We need to get this sorted.",
+        "ts": 1781517088
+      }
+    ]
+  },
+  "14433560": {
+    "worker_name": "Ali Saaram",
+    "conversation_id": "ce0dc0a3-7130-454a-bf01-fe0ae0a95f1b",
+    "messages": [
+      {
+        "sender": "amy",
+        "text": "Hi Ali,\n\nQuick thing \u2014 you didn't submit any shift notes for Kallan Jordan's shift on Monday 15th. Just a reminder these need to be done within 30 mins of finishing up. Can you get those in when you get a chance?",
+        "ts": 1781517088
+      }
+    ]
+  },
+  "3488476": {
+    "worker_name": "Irfanullah Zamir",
+    "conversation_id": "3194ea3c-e45c-4f76-ad68-44d6f484f424",
+    "messages": [
+      {
+        "sender": "amy",
+        "text": "Hi Irfanullah, just flagged an issue from your shift on Sunday at Joshua's place \u2014 you clocked in 6km away from his address on Lloyd St. You need to be within 0.5km and clocked in at the actual location before you start. Can you make sure that's sorted for next time?",
+        "ts": 1781517088
+      }
+    ]
+  },
+  "11444927": {
+    "worker_name": "Mayada El Hassan",
+    "conversation_id": "ea848408-e8ba-48dc-8c23-39f199a64b92",
+    "messages": [
+      {
+        "sender": "amy",
+        "text": "Hi Mayada, just flagged something from your shift on Monday 15-Jun at Nada Haliem's \u2014 no shift notes were submitted at all. Can you get those in? They need to be done within 30 mins of finishing up. Cheers!",
+        "ts": 1781517088
+      }
+    ]
+  },
+  "2455370": {
+    "worker_name": "Mohamed Liban",
+    "conversation_id": "f796160c-bc4c-431d-8288-dd5424850939",
+    "messages": [
+      {
+        "sender": "amy",
+        "text": "Hi Mohamed,\n\nGot a few things to flag from Kallan's shifts this week:\n\n**Sunday 14-Jun:** You clocked in 74 mins late (10:14 instead of 09:00) and then the system auto-closed your shift at 21:10 because you didn't manually clock out. Can you make sure to clock out properly at the end of your shifts?\n\n**Monday 15-Jun:** The shift notes are pretty messy \u2014 they're incomplete, cut off mid-sentence, and don't really make sense. They also need to meet NDIS standards, so they need to be clear observations, not opinions or interpretations. Plus the note mentions something about aggression \u2014 did you file a formal incident report for that? If something happened, we need the report submitted.\n\nRemember notes need to go in within 30 mins of finishing up. Can you sort these out and let me know about the incident report?",
+        "ts": 1781517088
+      }
+    ]
+  },
+  "2200746": {
+    "worker_name": "Peter Eronmwon",
+    "conversation_id": "a69e41b7-5ccf-4566-8437-f52eadd75d38",
+    "messages": [
+      {
+        "sender": "amy",
+        "text": "Hi Peter,\n\nJust checking in on your shift at Michael Lawrie's on Sunday 14th \u2014 the notes mention he got hurt. Did you end up filing a formal incident report for that? Need to make sure that's been submitted.",
+        "ts": 1781517088
+      }
+    ]
+  },
+  "2467746": {
+    "worker_name": "Roja Mehmood",
+    "conversation_id": "c95f13c8-abff-4515-8853-0668f2a7df40",
+    "messages": [
+      {
+        "sender": "amy",
+        "text": "Hi Roja, couple of things from your shifts that need sorting. On Sunday at Kallan's you clocked in 4.8km away from the address \u2014 needs to be within 0.5km, so make sure you're actually at the place before clocking in. Also the system force-closed that shift at 15:10 because you didn't manually clock out, so keep an eye on that.\n\nThen yesterday at John's place on Edgars Road you clocked in 4.2km away again \u2014 same deal, gotta be at the actual address. And no shift notes were submitted for that one either \u2014 just a reminder those need to be done within 30 mins of finishing up.",
+        "ts": 1781517088
+      }
+    ]
+  }
+}
