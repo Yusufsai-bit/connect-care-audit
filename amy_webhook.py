@@ -108,6 +108,7 @@ Conversation so far:
 
 Reply as Amy. Rules:
 - Casual and friendly — like texting a colleague
+- If the conversation history includes a [Manager] note, follow their instruction when replying to the worker
 - If they're explaining something, acknowledge it and say what needs to change going forward
 - If they say they've fixed it or will fix it, say great and confirm what you need to see (e.g. "just make sure it's in the system")
 - If they ask a question, answer it helpfully and briefly
@@ -189,9 +190,22 @@ async def handle_webhook(request: Request):
     if sender_id == str(CONNECTEAM_SENDER_ID):
         return JSONResponse({"status": "self_message"})
 
-    # Ignore messages from staff/management — they don't need Amy to reply to them
+    # Staff/management message — stay silent but log it as context for Amy
     if sender_id in STAFF_IDS:
-        return JSONResponse({"status": "staff_ignored"})
+        manager_name = get_worker_name(sender_id)
+        # Find which worker's conversation this belongs to by conversation ID
+        for uid, convo in conversation_log.items():
+            if convo.get("conversation_id") == conv_id:
+                convo["messages"].append({
+                    "sender": "manager",
+                    "name": manager_name,
+                    "text": message_text,
+                    "ts": int(time.time()),
+                })
+                save_to_github(conversation_log)
+                logger.info(f"Manager note from {manager_name} logged in {convo.get('worker_name')} conversation")
+                break
+        return JSONResponse({"status": "manager_noted"})
 
     # If sender not in memory, reload from GitHub in case audit ran since startup
     if sender_id not in conversation_log:
@@ -221,7 +235,8 @@ async def handle_webhook(request: Request):
 
     # Build history for Claude (last 10 messages)
     history = "\n".join(
-        f"{'Amy' if m['sender'] == 'amy' else worker_name}: {m['text']}"
+        f"[Manager - {m.get('name', 'Manager')}]: {m['text']}" if m["sender"] == "manager"
+        else f"{'Amy' if m['sender'] == 'amy' else worker_name}: {m['text']}"
         for m in convo["messages"][-10:]
     )
 
