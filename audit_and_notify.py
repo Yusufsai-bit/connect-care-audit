@@ -426,7 +426,7 @@ def main():
             sent_ok.append(worker_name)
             for iss in worker_issues:
                 fp = issue_fingerprint(iss)
-                notified[fp] = {"date": now.strftime("%Y-%m-%d"), "worker": worker_name}
+                notified[fp] = {"date": now.strftime("%Y-%m-%d"), "worker": worker_name, "category": iss.category, "client": iss.client or ""}
         else:
             ok, result = send_worker_message(uid, message, worker_name=worker_name)
             if ok:
@@ -440,6 +440,7 @@ def main():
                     notified[fp] = {
                         "date": now.strftime("%Y-%m-%d"), "worker": worker_name,
                         "sent_ts": int(now.timestamp()), "acknowledged": False,
+                        "category": iss.category, "client": iss.client or "",
                     }
                 # Save to conversation log so smart reply has context
                 convo_log[str(uid)] = {
@@ -478,7 +479,7 @@ def main():
                 cred_sent.append(worker_name)
                 for iss in cred_issues:
                     fp = issue_fingerprint(iss)
-                    notified[fp] = {"date": now.strftime("%Y-%m-%d"), "worker": worker_name, "cred": True, "cred_type": iss.category}
+                    notified[fp] = {"date": now.strftime("%Y-%m-%d"), "worker": worker_name, "cred": True, "cred_type": iss.category, "category": iss.category, "client": iss.client or ""}
             else:
                 print(f"  ✗ Credential notice failed for {worker_name}: {result}")
 
@@ -510,7 +511,7 @@ def main():
             summary_lines.append(f"- {client}: {', '.join(cats)}")
         for iss in team_new_issues:
             fp = issue_fingerprint(iss)
-            notified[fp] = {"date": now.strftime("%Y-%m-%d"), "worker": "(team)"}
+            notified[fp] = {"date": now.strftime("%Y-%m-%d"), "worker": "(team)", "category": iss.category, "client": iss.client or ""}
 
     has_issues = bool(sent_ok or sent_err or team_new_issues or cred_sent)
 
