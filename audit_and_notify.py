@@ -22,7 +22,7 @@ from collections import defaultdict
 
 from connecteam_audit import (
     run_audit, fetch_all_users,
-    send_worker_message,
+    send_worker_message, load_worker_conversations,
     CONNECTEAM_SENDER_ID, CONNECTEAM_API_KEY,
     AEST,
 )
@@ -45,7 +45,23 @@ MANAGEMENT_ONLY_CATEGORIES = {
 CC_MGMT_CONV_ID   = os.environ.get("CC_MGMT_CONV_ID", "4a14c09d-bc9f-46f2-9ad9-a728d6ddcbf6")
 BASE_URL          = "https://api.connecteam.com"
 NOTIFIED_FILE     = os.path.join(os.path.dirname(os.path.abspath(__file__)), "notified_issues.json")
+CONVO_LOG_FILE    = os.path.join(os.path.dirname(os.path.abspath(__file__)), "amy_conversation_log.json")
 DEDUP_EXPIRY_DAYS = 2   # forget fingerprints older than this
+
+
+# ── Conversation log (for Amy smart reply) ────────────────────────────────────
+
+def load_convo_log() -> dict:
+    try:
+        with open(CONVO_LOG_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def save_convo_log(log: dict):
+    with open(CONVO_LOG_FILE, "w", encoding="utf-8") as f:
+        json.dump(log, f, indent=2)
 
 
 # ── Deduplication ─────────────────────────────────────────────────────────────
@@ -212,8 +228,10 @@ def main():
     print(f"New team-level issues:   {len(team_new_issues)}\n")
 
     # ── Message each worker ───────────────────────────────────────────────────
-    sent_ok  = []
-    sent_err = []
+    sent_ok    = []
+    sent_err   = []
+    convo_log  = load_convo_log()
+    conv_map   = load_worker_conversations()  # uid -> conversation_id
 
     for worker_name, worker_issues in sorted(worker_new_issues.items()):
         uid = name_to_uid.get(worker_name)
@@ -238,9 +256,17 @@ def main():
                 for iss in worker_issues:
                     fp = issue_fingerprint(iss)
                     notified[fp] = {"date": now.strftime("%Y-%m-%d"), "worker": worker_name}
+                # Save to conversation log so smart reply has context
+                convo_log[str(uid)] = {
+                    "worker_name":     worker_name,
+                    "conversation_id": conv_map.get(str(uid), ""),
+                    "messages": [{"sender": "amy", "text": message, "ts": int(now.timestamp())}],
+                }
             else:
                 print(f"  ✗ Failed {worker_name}: {result}")
                 sent_err.append(worker_name)
+
+    save_convo_log(convo_log)
 
     # ── Manager summary → CC Management ─────────────────────────────────────
     summary_lines = [f"Audit done ({run_label})."]
