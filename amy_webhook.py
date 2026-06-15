@@ -758,7 +758,11 @@ async def handle_webhook(request: Request):
         return JSONResponse({"status": "system_message_ignored"})
 
     # Also ignore known Connecteam automated message patterns
-    _SYSTEM_PATTERNS = ("shift sent for approval", "shift approved", "shift rejected", "clock-in reminder")
+    _SYSTEM_PATTERNS = (
+        "shift sent for approval", "shift approved", "shift rejected", "clock-in reminder",
+        "timesheet edit request", "timesheet has been edited", "timesheet edit",
+        "edit request", "requested an edit",
+    )
     if any(message_text.lower().startswith(p) for p in _SYSTEM_PATTERNS):
         logger.info(f"Ignoring automated pattern message: {message_text[:60]}")
         return JSONResponse({"status": "automated_message_ignored"})
