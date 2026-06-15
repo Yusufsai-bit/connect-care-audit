@@ -748,19 +748,18 @@ async def handle_webhook(request: Request):
     conv_id      = str(data.get("conversationId") or data.get("conversation_id") or "")
     message_text = str(data.get("text") or data.get("content") or data.get("message") or "").strip()
 
-    # Amy only handles CC Management — Railway webhook covers worker messages
-    if conv_id != CC_MGMT_CONV_ID:
-        return JSONResponse({"status": "ignored_not_cc_mgmt"})
-
     if sender_id == str(CONNECTEAM_SENDER_ID):
         return JSONResponse({"status": "self_message"})
+
+    logger.info(f"Message in conv {conv_id} | CC_MGMT_CONV_ID={CC_MGMT_CONV_ID} | sender={sender_id}")
 
     if sender_id in STAFF_IDS:
         manager_name  = get_worker_name(sender_id)
         manager_first = manager_name.split()[0]
-        logger.info(f"Manager {manager_name} in CC Management: {message_text[:80]}")
+        logger.info(f"Manager {manager_name}: {message_text[:80]}")
+        is_cc_mgmt = (conv_id == CC_MGMT_CONV_ID)
         try:
-            context = build_context(message_text)
+            context = build_context(message_text) if is_cc_mgmt else ""
         except Exception as e:
             logger.error(f"build_context failed: {e}")
             context = ""
