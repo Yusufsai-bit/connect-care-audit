@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: shift-notify
+  group: audit-930am
   cancel-in-progress: false
 
 jobs:

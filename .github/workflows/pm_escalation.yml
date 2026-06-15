@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: compliance-log
+  group: noon-check
   cancel-in-progress: false
 
 jobs:
