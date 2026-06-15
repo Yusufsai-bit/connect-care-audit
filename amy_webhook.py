@@ -29,7 +29,9 @@ CONNECTEAM_SENDER_ID = os.environ.get("CONNECTEAM_SENDER_ID", "")
 ANTHROPIC_API_KEY    = os.environ.get("ANTHROPIC_API_KEY", "")
 GITHUB_TOKEN         = os.environ.get("GITHUB_TOKEN", "")
 GITHUB_REPO          = os.environ.get("GITHUB_REPO", "Yusufsai-bit/connect-care-audit")
-CC_MGMT_CONV_ID      = os.environ.get("CC_MGMT_CONV_ID", "4a14c09d-bc9f-46f2-9ad9-a728d6ddcbf6")
+CC_MGMT_CONV_ID      = os.environ.get("CC_MGMT_CONV_ID", "")
+if not CC_MGMT_CONV_ID:
+    raise RuntimeError("CC_MGMT_CONV_ID environment variable is not set")
 BASE_URL             = "https://api.connecteam.com"
 
 STAFF_IDS        = {"2149475", "9736871", "2201497"}  # Yusuf, Nada, Faduma
@@ -708,21 +710,22 @@ def send_message(conv_id: str, text: str) -> bool:
         return False
 
 
-# ── Debug endpoint ─────────────────────────────────────────────────────────────
+# ── Debug endpoint (disabled in production) ────────────────────────────────────
 
-@app.post("/webhook/debug")
-async def debug_webhook(request: Request):
-    try:
-        body = await request.body()
+if os.environ.get("DEBUG", "").lower() == "true":
+    @app.post("/webhook/debug")
+    async def debug_webhook(request: Request):
         try:
-            payload = json.loads(body)
-        except Exception:
-            payload = {"raw": body.decode(errors="replace")}
-        logger.info(f"DEBUG PAYLOAD: {json.dumps(payload)}")
-        logger.info(f"DEBUG HEADERS: {json.dumps(dict(request.headers))}")
-        return JSONResponse({"received": payload, "headers": dict(request.headers)})
-    except Exception as e:
-        return JSONResponse({"error": str(e)})
+            body = await request.body()
+            try:
+                payload = json.loads(body)
+            except Exception:
+                payload = {"raw": body.decode(errors="replace")}
+            logger.info(f"DEBUG PAYLOAD: {json.dumps(payload)}")
+            logger.info(f"DEBUG HEADERS: {json.dumps(dict(request.headers))}")
+            return JSONResponse({"received": payload, "headers": dict(request.headers)})
+        except Exception as e:
+            return JSONResponse({"error": str(e)})
 
 
 # ── Webhook endpoint ───────────────────────────────────────────────────────────

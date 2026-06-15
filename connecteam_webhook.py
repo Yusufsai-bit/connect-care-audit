@@ -61,7 +61,8 @@ CLIENT_GPS_OVERRIDES = {
 }
 
 if not WEBHOOK_SECRET:
-    print("[WARNING] WEBHOOK_SECRET is not set — any caller can POST to this endpoint. Set it in Railway env vars.")
+    import sys
+    sys.exit("FATAL: WEBHOOK_SECRET is not set. Set it in Railway env vars before starting.")
 
 # Connecteam / Twilio credentials
 CT_KEY            = os.environ.get("CONNECTEAM_API_KEY", "")
@@ -71,7 +72,10 @@ SENDER_ID         = int(os.environ.get("CONNECTEAM_SENDER_ID", "0") or "0")
 AMY_SENDER_IDS    = {SENDER_ID} if SENDER_ID else set()  # derived so it stays in sync with env
 ALL_SYSTEM_IDS    = OBSERVER_IDS | AMY_SENDER_IDS
 MANAGER_USER_ID   = 2149475  # Yusuf
-CC_MGMT_CONV_ID   = os.environ.get("CC_MGMT_CONV_ID", "4a14c09d-bc9f-46f2-9ad9-a728d6ddcbf6")
+CC_MGMT_CONV_ID   = os.environ.get("CC_MGMT_CONV_ID", "")
+if not CC_MGMT_CONV_ID:
+    import sys
+    sys.exit("FATAL: CC_MGMT_CONV_ID is not set. Set it in Railway env vars before starting.")
 
 # GitHub API sync — allows webhook to persist acknowledgements back to the repo
 # so the dashboard and GitHub Actions always see up-to-date notification status.
@@ -86,14 +90,26 @@ QUIET_START = 19  # 7 PM AEST — no worker messages after this hour
 QUIET_END   = 6   # 6 AM AEST — no worker messages before this hour
 
 
+_SAFETY_KEYWORDS = {
+    "fall", "fallen", "injury", "injured", "unconscious", "ambulance", "hospital",
+    "emergency", "police", "assault", "attack", "missing", "not breathing",
+    "overdose", "seizure", "fire", "danger", "unsafe", "urgent", "incident",
+}
+
 def _is_quiet_hours():
     hour = datetime.datetime.now(AEST).hour
     return hour >= QUIET_START or hour < QUIET_END
 
 
-def _worker_send(user_id, msg):
-    """Send a chat message to a worker, but only between 6 AM and 7 PM AEST."""
-    if _is_quiet_hours():
+def _is_safety_critical(text: str) -> bool:
+    """Returns True if the message contains urgent participant safety keywords."""
+    lowered = text.lower()
+    return any(kw in lowered for kw in _SAFETY_KEYWORDS)
+
+
+def _worker_send(user_id, msg, force=False):
+    """Send a chat message to a worker. Bypasses quiet hours if force=True (safety critical)."""
+    if _is_quiet_hours() and not force:
         ts = datetime.datetime.now(AEST).strftime("%I:%M %p")
         print(f"  [quiet hours {ts}] skipping message to user {user_id}")
         return False
@@ -956,7 +972,10 @@ def handle_chat_reply(data):
         mark_acknowledged(user_id)
 
     if amy_reply and SENDER_ID and CT_KEY:
-        _worker_send(user_id, amy_reply)
+        safety_critical = _is_safety_critical(text)
+        _worker_send(user_id, amy_reply, force=safety_critical)
+        if safety_critical:
+            print(f"  [SAFETY OVERRIDE] quiet hours bypassed — safety-critical message detected")
         append_to_conversation(user_id, "amy", amy_reply)
         print(f"  Amy replied ({'holding' if is_complex else 'closed'}): '{amy_reply[:80]}'")
 

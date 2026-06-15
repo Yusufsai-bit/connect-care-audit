@@ -426,6 +426,12 @@ def fetch_worker_credentials(users):
                     cred_fields[str(fid)] = cred_type
                 break
 
+    expected_types = set(DOC_KEYWORDS.keys())
+    found_types    = set(cred_fields.values())
+    missing_types  = expected_types - found_types
+    if missing_types:
+        print(f"  [WARNING] Credential custom fields not found in Connecteam for: {', '.join(sorted(missing_types))}. "
+              f"Workers with these credentials will not be monitored.")
     if not cred_fields:
         return {}
 
@@ -962,11 +968,15 @@ def assess_notes_with_claude(notes_batch):
         print("  [WARNING] anthropic package not found -- skipping AI note assessment.")
         return {}
 
+    # Pseudonymise participant names before sending to external AI API
+    def _pseudo(name: str) -> str:
+        return f"Client {name[0].upper()}" if name else "Client"
+
     payload = json.dumps([
         {
             "id":             n["id"],
-            "worker":         n["worker"],
-            "client":         n["client"],
+            "worker":         n["worker"].split()[0] if n.get("worker") else "Worker",
+            "client":         _pseudo(n["client"]),
             "date":           n["date"],
             "duration_hours": n["duration_hours"],
             "text":           n["text"][:2000],
@@ -1019,6 +1029,15 @@ Return ONLY a valid JSON array. No explanation, no markdown."""
         return {r["id"]: r for r in results}
     except Exception as e:
         print(f"  [WARNING] Claude assessment failed: {e}")
+        # Log failed note IDs so they can be manually reviewed
+        failed_ids = [n["id"] for n in notes_batch]
+        _failure_log = os.path.join(os.path.dirname(__file__), "note_assessment_failures.json")
+        try:
+            existing = json.load(open(_failure_log, encoding="utf-8")) if os.path.exists(_failure_log) else []
+            existing.append({"timestamp": str(datetime.now(AEST)), "error": str(e), "note_ids": failed_ids})
+            json.dump(existing[-200:], open(_failure_log, "w", encoding="utf-8"), indent=2)
+        except Exception:
+            pass
         return {}
 
 
@@ -1331,6 +1350,10 @@ def run_audit(days_back=7):
                                     f"Clocked in {dist:.1f}km from client's address "
                                     f"(allowed radius: {radius_km:.2f}km · "
                                     f"location: {loc.get('address', 'unknown')})."))
+                        else:
+                            issues.append(Issue("HIGH", "GPS DATA MISSING", name, client, dlabel,
+                                "Clock-in GPS coordinates are (0,0) — location services may be "
+                                "disabled on this worker's device. GPS compliance cannot be verified."))
 
     # ------------------------------------------
     # SECTION 3 -- SHIFT NOTE QUALITY

@@ -30,20 +30,23 @@ from connecteam_audit import (
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-DAYS_BACK         = 1          # always look back 24 hours; dedup handles overlap
+DAYS_BACK         = int(os.environ.get("AUDIT_DAYS_BACK", "1"))
 NOTIFY_SEVERITIES = {"CRITICAL", "HIGH"}
 
 SKIP_CATEGORIES = set()  # nothing skipped — credentials handled here now
 
-CRED_CATEGORIES = {"EXPIRED CREDENTIAL", "CREDENTIAL EXPIRING SOON"}
-CRED_DEDUP_DAYS = 7   # don't re-notify about same credential issue within this window
+CRED_CATEGORIES         = {"EXPIRED CREDENTIAL", "CREDENTIAL EXPIRING SOON"}
+CRED_DEDUP_DAYS_EXPIRED = 1   # re-notify daily for expired credentials
+CRED_DEDUP_DAYS_SOON    = 7   # re-notify weekly for expiring-soon credentials
 
 # Rostering/management issues — go to CC Management only, never to the individual worker
 MANAGEMENT_ONLY_CATEGORIES = {
     "UNDERSTAFFED -- RATIO BREACH",
 }
 
-CC_MGMT_CONV_ID   = os.environ.get("CC_MGMT_CONV_ID", "4a14c09d-bc9f-46f2-9ad9-a728d6ddcbf6")
+CC_MGMT_CONV_ID   = os.environ.get("CC_MGMT_CONV_ID", "")
+if not CC_MGMT_CONV_ID:
+    raise RuntimeError("CC_MGMT_CONV_ID environment variable is not set")
 BASE_URL          = "https://api.connecteam.com"
 NOTIFIED_FILE     = os.path.join(os.path.dirname(os.path.abspath(__file__)), "notified_issues.json")
 CONVO_LOG_FILE    = os.path.join(os.path.dirname(os.path.abspath(__file__)), "amy_conversation_log.json")
@@ -266,9 +269,15 @@ def main():
 
     TEAM_NAMES = {"(team)", "unknown", ""}
 
-    # Credential dedup — don't re-notify within CRED_DEDUP_DAYS
-    cred_cutoff = (datetime.datetime.now(AEST) - datetime.timedelta(days=CRED_DEDUP_DAYS)).strftime("%Y-%m-%d")
-    recent_cred_fps = {fp for fp, v in notified.items() if v.get("cred") and v.get("date", "") >= cred_cutoff}
+    # Credential dedup — expired credentials re-notify daily, expiring-soon weekly
+    cutoff_expired = (now - datetime.timedelta(days=CRED_DEDUP_DAYS_EXPIRED)).strftime("%Y-%m-%d")
+    cutoff_soon    = (now - datetime.timedelta(days=CRED_DEDUP_DAYS_SOON)).strftime("%Y-%m-%d")
+    recent_cred_fps = {
+        fp for fp, v in notified.items()
+        if v.get("cred") and v.get("date", "") >= (
+            cutoff_expired if v.get("cred_type") == "EXPIRED CREDENTIAL" else cutoff_soon
+        )
+    }
 
     for iss in issues:
         if iss.severity not in NOTIFY_SEVERITIES and not (
@@ -358,7 +367,7 @@ def main():
                 cred_sent.append(worker_name)
                 for iss in cred_issues:
                     fp = issue_fingerprint(iss)
-                    notified[fp] = {"date": now.strftime("%Y-%m-%d"), "worker": worker_name, "cred": True}
+                    notified[fp] = {"date": now.strftime("%Y-%m-%d"), "worker": worker_name, "cred": True, "cred_type": iss.category}
             else:
                 print(f"  ✗ Credential notice failed for {worker_name}: {result}")
 
@@ -392,13 +401,15 @@ def main():
             fp = issue_fingerprint(iss)
             notified[fp] = {"date": now.strftime("%Y-%m-%d"), "worker": "(team)"}
 
-    if not sent_ok and not team_new_issues:
-        summary_lines.append(" No new issues found.")
+    has_issues = bool(sent_ok or sent_err or team_new_issues or cred_sent)
 
-    mgmt_msg = "\n".join(summary_lines)
-    print(f"\nPosting summary to CC Management...")
-    print(f"  {mgmt_msg[:200]}")
-    post_to_management(mgmt_msg)
+    if has_issues:
+        mgmt_msg = "\n".join(summary_lines)
+        print(f"\nPosting summary to CC Management...")
+        print(f"  {mgmt_msg[:200]}")
+        post_to_management(mgmt_msg)
+    else:
+        print(f"\nAll clear — no new issues found. Skipping CC Management post.")
 
     # ── Save dedup state ──────────────────────────────────────────────────────
     save_notified(notified)
