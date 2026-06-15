@@ -749,7 +749,19 @@ async def handle_webhook(request: Request):
     sender_id    = str(msg.get("senderId") or msg.get("userId") or msg.get("senderUserId") or "")
     conv_id      = str(msg.get("conversationId") or msg.get("conversation_id") or data.get("conversationId") or "")
     message_text = str(msg.get("content") or msg.get("text") or "").strip()
-    logger.info(f"Parsed: sender={sender_id} conv={conv_id} text={message_text[:60]}")
+    is_system    = bool(msg.get("isSystem") or msg.get("is_system") or data.get("isSystem"))
+    logger.info(f"Parsed: sender={sender_id} conv={conv_id} isSystem={is_system} text={message_text[:60]}")
+
+    # Ignore automated Connecteam system notifications (shift approvals, clock-in alerts, etc.)
+    if is_system:
+        logger.info("Ignoring system message")
+        return JSONResponse({"status": "system_message_ignored"})
+
+    # Also ignore known Connecteam automated message patterns
+    _SYSTEM_PATTERNS = ("shift sent for approval", "shift approved", "shift rejected", "clock-in reminder")
+    if any(message_text.lower().startswith(p) for p in _SYSTEM_PATTERNS):
+        logger.info(f"Ignoring automated pattern message: {message_text[:60]}")
+        return JSONResponse({"status": "automated_message_ignored"})
 
     if sender_id == str(CONNECTEAM_SENDER_ID):
         return JSONResponse({"status": "self_message"})
@@ -782,13 +794,15 @@ async def handle_webhook(request: Request):
 
     if sender_id not in conversation_log:
         worker_name = get_worker_name(sender_id)
-        logger.info(f"No context for {worker_name} ({sender_id}) — escalating")
-        send_message(conv_id, "Got it, give me a sec.")
+        logger.info(f"No context for {worker_name} ({sender_id}) — sending welcome")
+        # Send a friendly default reply instead of spamming CC Management
         send_message(
-            CC_MGMT_CONV_ID,
-            f"{worker_name} just messaged Amy:\n\n\"{message_text}\"\n\nNo compliance context on file — what should she reply?"
+            conv_id,
+            f"Hi {worker_name.split()[0]}! 👋 I'm Amy, the Connect Care compliance assistant. "
+            "I can help with shift questions, clock-in/out issues, and leave requests. "
+            "What do you need?"
         )
-        return JSONResponse({"status": "escalated_to_management"})
+        return JSONResponse({"status": "welcomed_new_worker"})
 
     if not message_text:
         return JSONResponse({"status": "empty_message"})
