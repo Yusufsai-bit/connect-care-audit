@@ -7,6 +7,14 @@ import os, io, calendar, datetime, json, uuid
 import pandas as pd
 import streamlit as st
 
+try:
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill, Alignment
+    from openpyxl.utils import get_column_letter
+    _OPENPYXL_OK = True
+except ImportError:
+    _OPENPYXL_OK = False
+
 # ── Secrets → env vars ────────────────────────────────────────────────────────
 for _k, _e in [
     ("CONNECTEAM_API_KEY",    "CONNECTEAM_API_KEY"),
@@ -20,6 +28,7 @@ CT_CHAT_READY = bool(st.secrets.get("CONNECTEAM_SENDER_ID", ""))
 
 from connecteam_audit import (
     run_audit, fetch_all_users,
+    fetch_worker_credentials,
     send_worker_message, add_worker_profile_note,
 )
 
@@ -375,12 +384,13 @@ st.markdown("<br>", unsafe_allow_html=True)
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
 
-tab_overview, tab_workers, tab_clients, tab_docs, tab_messages = st.tabs([
+tab_overview, tab_workers, tab_clients, tab_docs, tab_messages, tab_export = st.tabs([
     "🚨 Action Required",
     "👤 Workers",
     "👥 Clients",
     "📄 Documents",
     "📬 Messages",
+    "📋 Audit Package",
 ])
 
 # ═══════════════════════════════════════════════════════
@@ -726,3 +736,395 @@ with tab_messages:
                 file_name=f"ConnectCare_Messages_{today.strftime('%d-%b-%Y')}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
+
+# ═══════════════════════════════════════════════════════
+# TAB 6 — Audit Package Export
+# ═══════════════════════════════════════════════════════
+with tab_export:
+    st.markdown("### 📋 NDIS Audit Evidence Package")
+    st.caption(
+        "Generate a formatted Excel workbook with all compliance evidence for an NDIS audit "
+        "or internal review. Select the date range below, then click Download."
+    )
+
+    if not _OPENPYXL_OK:
+        st.error("openpyxl is not installed. Run `pip install openpyxl` to enable audit package export.")
+        st.stop()
+
+    # ── Date range selector ───────────────────────────────────────────────────
+    st.markdown("#### Date range")
+    export_col1, export_col2 = st.columns(2)
+    with export_col1:
+        export_start = st.date_input(
+            "From",
+            value=today - datetime.timedelta(days=30),
+            max_value=today,
+            key="export_start",
+        )
+    with export_col2:
+        export_end = st.date_input(
+            "To",
+            value=today,
+            min_value=export_start,
+            max_value=today,
+            key="export_end",
+        )
+
+    export_period = f"{export_start.strftime('%d %b %Y')} – {export_end.strftime('%d %b %Y')}"
+    st.caption(f"Selected period: **{export_period}**")
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # ── Excel builder ─────────────────────────────────────────────────────────
+
+    def _date_in_range(date_str: str) -> bool:
+        """Return True if date_str (various formats) falls within [export_start, export_end]."""
+        d = parse_date(date_str)
+        if d is None:
+            return True   # unknown date — include rather than silently drop
+        return export_start <= d <= export_end
+
+    SEV_FILL = {
+        "CRITICAL": PatternFill("solid", fgColor="FFD0D0"),
+        "HIGH":     PatternFill("solid", fgColor="FFE5CC"),
+        "MEDIUM":   PatternFill("solid", fgColor="FFFACC"),
+    }
+    HEADER_FILL = PatternFill("solid", fgColor="D9E8FB")
+    HEADER_FONT = Font(bold=True, color="1A1A2E")
+
+    def _style_sheet(ws, header_row: int = 1):
+        """Apply header style, freeze pane, and auto-width to an openpyxl worksheet."""
+        for cell in ws[header_row]:
+            cell.font      = HEADER_FONT
+            cell.fill      = HEADER_FILL
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        ws.freeze_panes = ws.cell(row=header_row + 1, column=1)
+        for col_idx, col_cells in enumerate(ws.columns, 1):
+            max_len = max(
+                (len(str(c.value or "")) for c in col_cells),
+                default=8,
+            )
+            ws.column_dimensions[get_column_letter(col_idx)].width = min(max(max_len + 2, 12), 55)
+
+    def _apply_severity_fills(ws, sev_col_idx: int, header_row: int = 1):
+        """Colour-fill rows based on severity value in the given column (1-indexed)."""
+        for row in ws.iter_rows(min_row=header_row + 1, max_row=ws.max_row):
+            sev_cell = row[sev_col_idx - 1]
+            fill     = SEV_FILL.get(str(sev_cell.value or "").upper())
+            if fill:
+                for cell in row:
+                    cell.fill = fill
+
+    def build_audit_package() -> bytes:
+        """Assemble all sheets and return the workbook as bytes."""
+        import re as _re
+        import hashlib as _hashlib
+
+        wb = openpyxl.Workbook()
+        wb.remove(wb.active)   # remove default empty sheet
+
+        # ── Filter audit issues to selected date range ────────────────────────
+        period_issues = [
+            i for i in (all_issues or [])
+            if _date_in_range(i.date or "")
+        ]
+
+        # ── Sheet 1: Shift Attendance ─────────────────────────────────────────
+        ws1 = wb.create_sheet("Shift Attendance")
+        ATTEND_HEADERS = [
+            "Date", "Worker", "Client",
+            "Scheduled Start", "Actual Clock-In",
+            "Scheduled End",   "Actual Clock-Out",
+            "Clock-In GPS Status", "Duration Hours", "Notes Submitted (Y/N)",
+        ]
+        ws1.append(ATTEND_HEADERS)
+
+        ATTEND_CATS = {
+            "NO CLOCK-IN", "LATE CLOCK-IN", "EARLY CLOCK-OUT",
+            "MISSING CLOCK-OUT", "AUTO CLOCK-OUT", "GPS MISMATCH",
+            "GPS DATA MISSING", "SUSPICIOUSLY SHORT SHIFT",
+            "UNSCHEDULED SHIFT", "MULTIPLE CLOCK-INS SAME CLIENT/DAY",
+        }
+        NOTE_CATS = {"NO SHIFT NOTES", "EMPTY NOTES", "INSUFFICIENT NOTES"}
+
+        # Build a set of (worker, date) combos with note issues
+        no_notes_set = {
+            (i.worker, i.date or "") for i in period_issues if i.category in NOTE_CATS
+        }
+
+        seen_attend = set()
+        for iss in period_issues:
+            if iss.category not in ATTEND_CATS:
+                continue
+            key = (iss.worker, iss.date or "", iss.category)
+            if key in seen_attend:
+                continue
+            seen_attend.add(key)
+
+            # Parse GPS status from detail
+            gps_ok = "OK"
+            if "GPS" in iss.category:
+                gps_ok = "FAIL — " + iss.detail[:60]
+
+            has_notes = "N" if (iss.worker, iss.date or "") in no_notes_set else "Y"
+
+            # Parse times from detail if available (format: "HH:MM–HH:MM" or "arrived HH:MM")
+            sched_start = sched_end = actual_in = actual_out = ""
+            dur_hours   = ""
+            detail = iss.detail or ""
+            time_pairs = _re.findall(r"\b(\d{1,2}:\d{2})\b", detail)
+            if len(time_pairs) >= 2:
+                sched_start, actual_in = time_pairs[0], time_pairs[1]
+            elif len(time_pairs) == 1:
+                sched_start = time_pairs[0]
+
+            ws1.append([
+                iss.date or "", iss.worker, iss.client or "",
+                sched_start, actual_in,
+                sched_end,   actual_out,
+                gps_ok, dur_hours, has_notes,
+            ])
+
+        _style_sheet(ws1)
+
+        # ── Sheet 2: Notes Quality ────────────────────────────────────────────
+        ws2 = wb.create_sheet("Notes Quality")
+        NOTES_HEADERS = [
+            "Date", "Worker", "Client",
+            "Note Length (words)", "Passes NDIS Standard (Y/N)",
+            "Issues Found", "Severity",
+        ]
+        ws2.append(NOTES_HEADERS)
+
+        NOTES_CATS = {
+            "NO SHIFT NOTES":          ("", "N", "No notes at all"),
+            "EMPTY NOTES":             ("", "N", "Notes field blank"),
+            "INSUFFICIENT NOTES":      ("", "N", "Too short"),
+            "FAILS NDIS STANDARD":     ("", "N", ""),
+            "POSSIBLE AI-GENERATED NOTE": ("", "?", "Possible AI/template content"),
+            "NOT PLAIN ENGLISH":       ("", "?", "Unclear language"),
+            "NOTE DOESN'T MAKE SENSE": ("", "?", "Incoherent"),
+            "SUBJECTIVE LANGUAGE":     ("", "Y", "Opinions used instead of observations"),
+            "NOT PERSON-CENTRED":      ("", "Y", "Not person-centred"),
+            "LATE NOTE SUBMISSION":    ("", "Y", "Submitted late — possible backdating"),
+            "DUPLICATE/COPY-PASTE NOTES": ("", "?", "Copy-pasted across shifts"),
+            "CROSS-WORKER COPY-PASTE NOTES": ("", "?", "Identical notes across two workers"),
+        }
+        for iss in period_issues:
+            if iss.category not in NOTES_CATS:
+                continue
+            _, ndis_pass, default_issue = NOTES_CATS[iss.category]
+            issues_text = iss.detail or default_issue
+            # Extract word count if present in detail
+            wc_match = _re.search(r"Only (\d+) words", iss.detail or "")
+            wc = wc_match.group(1) if wc_match else ""
+            row = [
+                iss.date or "", iss.worker, iss.client or "",
+                wc, ndis_pass or "N",
+                issues_text[:200], iss.severity,
+            ]
+            ws2.append(row)
+
+        _style_sheet(ws2)
+        _apply_severity_fills(ws2, sev_col_idx=7)
+
+        # ── Sheet 3: Credentials ─────────────────────────────────────────────
+        ws3 = wb.create_sheet("Credentials")
+        CRED_HEADERS = [
+            "Worker Name", "Credential Type", "Expiry Date",
+            "Status", "Days Until Expiry",
+        ]
+        ws3.append(CRED_HEADERS)
+
+        # Pull credential data fresh (already cached by lru_cache in this session)
+        try:
+            users_for_creds = fetch_all_users()
+            cred_map        = fetch_worker_credentials(users_for_creds)
+        except Exception:
+            cred_map        = {}
+            users_for_creds = {}
+
+        today_d = datetime.date.today()
+
+        def _uname_cred(uid):
+            u = users_for_creds.get(uid)
+            return f"{u['firstName']} {u['lastName']}" if u else f"User {uid}"
+
+        for uid, creds in sorted(cred_map.items(), key=lambda kv: _uname_cred(kv[0])):
+            wname = _uname_cred(uid)
+            for cred_type, expiry_date in sorted(creds.items()):
+                days_left = (expiry_date - today_d).days
+                if days_left < 0:
+                    status = "Expired"
+                elif days_left <= 30:
+                    status = "Expiring Soon"
+                else:
+                    status = "Valid"
+                ws3.append([
+                    wname, cred_type,
+                    expiry_date.strftime("%d %b %Y"),
+                    status, days_left,
+                ])
+
+        _style_sheet(ws3)
+        # Colour expired rows red, expiring-soon orange
+        STATUS_COL = 4   # "Status" is column 4
+        for row in ws3.iter_rows(min_row=2, max_row=ws3.max_row):
+            status_val = str(row[STATUS_COL - 1].value or "")
+            if status_val == "Expired":
+                for cell in row:
+                    cell.fill = SEV_FILL["CRITICAL"]
+            elif status_val == "Expiring Soon":
+                for cell in row:
+                    cell.fill = SEV_FILL["HIGH"]
+
+        # ── Sheet 4: Compliance Issues ────────────────────────────────────────
+        ws4 = wb.create_sheet("Compliance Issues")
+        ISSUES_HEADERS = [
+            "Date Detected", "Worker", "Client",
+            "Issue Category", "Severity", "Detail",
+            "Notified (Y/N)", "Acknowledged (Y/N)",
+        ]
+        ws4.append(ISSUES_HEADERS)
+
+        # Load notified_issues.json for cross-reference
+        _notified_path = os.path.join(os.path.dirname(__file__), "notified_issues.json")
+        try:
+            with open(_notified_path, "r", encoding="utf-8") as _f:
+                _notified_raw = json.load(_f)
+        except Exception:
+            _notified_raw = {}
+
+        # Build a quick set of fingerprints that have been notified
+        def _fp(worker, category, date):
+            return _hashlib.md5(f"{worker}|{category}|{date or ''}".encode()).hexdigest()
+
+        notified_fps = set(_notified_raw.keys())
+
+        for iss in period_issues:
+            fp       = _fp(iss.worker, iss.category, iss.date)
+            notified = "Y" if fp in notified_fps else "N"
+            acked_v  = _notified_raw.get(fp, {})
+            acked    = "Y" if isinstance(acked_v, dict) and acked_v.get("acknowledged") else "N"
+            ws4.append([
+                iss.date or "",
+                iss.worker,
+                iss.client or "",
+                iss.category,
+                iss.severity,
+                (iss.detail or "")[:300],
+                notified,
+                acked,
+            ])
+
+        _style_sheet(ws4)
+        _apply_severity_fills(ws4, sev_col_idx=5)
+
+        # ── Sheet 5: Notifications Log ────────────────────────────────────────
+        ws5 = wb.create_sheet("Notifications Log")
+        NOTIF_HEADERS = [
+            "Date Sent", "Worker", "Issue Summary",
+            "Channel", "Status", "Acknowledged At",
+        ]
+        ws5.append(NOTIF_HEADERS)
+
+        # Load the dashboard's own notifications_log.json
+        _notif_log_path = os.path.join(os.path.dirname(__file__), "notifications_log.json")
+        try:
+            with open(_notif_log_path, "r", encoding="utf-8") as _f:
+                _notif_log = json.load(_f)
+        except Exception:
+            _notif_log = []
+
+        for entry in _notif_log:
+            sent_at = entry.get("sent_at", "")
+            # Check date filter
+            try:
+                sent_dt = datetime.datetime.strptime(sent_at, "%d %b %Y, %I:%M %p")
+                if not (export_start <= sent_dt.date() <= export_end):
+                    continue
+            except Exception:
+                pass   # include if we can't parse the date
+
+            summary = "; ".join(
+                f"{iss.get('Issue','?')} ({iss.get('Client','?')})"
+                for iss in (entry.get("issues") or [])[:3]
+            )
+            ws5.append([
+                sent_at,
+                entry.get("worker", ""),
+                summary,
+                "Connecteam Chat",
+                entry.get("status", ""),
+                entry.get("acknowledged_at") or "",
+            ])
+
+        _style_sheet(ws5)
+
+        # ── Return bytes ──────────────────────────────────────────────────────
+        buf = io.BytesIO()
+        wb.save(buf)
+        return buf.getvalue()
+
+    # ── Generate and offer download ───────────────────────────────────────────
+    st.info(
+        "The audit package pulls data from the most recent audit run. "
+        "Click **▶ Run Audit** in the sidebar first if you need fresh data."
+    )
+
+    if all_issues is None:
+        st.warning("No audit data loaded yet — run the audit from the sidebar first.")
+    else:
+        n_in_range = sum(
+            1 for i in all_issues if _date_in_range(i.date or "")
+        )
+        st.markdown(f"**{n_in_range}** compliance issues in selected period will be included.")
+
+        generate_btn = st.button(
+            "📦 Generate Audit Package",
+            type="primary",
+            use_container_width=True,
+        )
+
+        if generate_btn:
+            with st.spinner("Building Excel workbook (credentials + issues + logs)…"):
+                try:
+                    excel_bytes = build_audit_package()
+                    st.session_state["audit_package_bytes"]    = excel_bytes
+                    st.session_state["audit_package_period"]   = export_period
+                    st.session_state["audit_package_filename"] = (
+                        f"ConnectCare_AuditPackage_"
+                        f"{export_start.strftime('%d%b')}-{export_end.strftime('%d%b%Y')}.xlsx"
+                    )
+                    st.success("Audit package ready — click Download below.")
+                except Exception as _e:
+                    st.error(f"Failed to build audit package: {_e}")
+
+        if st.session_state.get("audit_package_bytes"):
+            st.download_button(
+                label="📥 Download NDIS Audit Package",
+                data=st.session_state["audit_package_bytes"],
+                file_name=st.session_state.get(
+                    "audit_package_filename",
+                    f"ConnectCare_AuditPackage_{today.strftime('%d-%b-%Y')}.xlsx",
+                ),
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+            )
+            pkg_period = st.session_state.get("audit_package_period", "")
+            if pkg_period:
+                st.caption(f"Package covers: {pkg_period}")
+
+        st.divider()
+        st.markdown("#### What's in the package?")
+        st.markdown("""
+| Sheet | Contents |
+|---|---|
+| **Shift Attendance** | Clock-in/out times, GPS status, notes completion |
+| **Notes Quality** | Word counts, NDIS standard compliance, AI-detection flags |
+| **Credentials** | All worker credential expiry dates with status |
+| **Compliance Issues** | Every flagged issue with severity, notification status, and acknowledgement |
+| **Notifications Log** | Record of all compliance messages sent to workers |
+
+Rows are colour-coded: 🔴 red = Critical, 🟠 orange = High, 🟡 yellow = Medium.
+Headers are bold with a blue tint. Top row is frozen for easy scrolling.
+        """)
