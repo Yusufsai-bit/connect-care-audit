@@ -6,9 +6,19 @@ and generates a reply via Claude Haiku.
 Deploy on Render: uvicorn amy_webhook:app --host 0.0.0.0 --port $PORT
 """
 
-import os, json, time, base64, logging, requests
+import os, json, time, base64, logging, re, datetime, requests
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse
+
+try:
+    from zoneinfo import ZoneInfo
+    AEST = ZoneInfo("Australia/Melbourne")
+except ImportError:
+    class _AEST:
+        def utcoffset(self, dt): return datetime.timedelta(hours=10)
+        def tzname(self, dt): return "AEST"
+        def dst(self, dt): return datetime.timedelta(0)
+    AEST = _AEST()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -22,12 +32,15 @@ GITHUB_REPO          = os.environ.get("GITHUB_REPO", "Yusufsai-bit/connect-care-
 CC_MGMT_CONV_ID      = os.environ.get("CC_MGMT_CONV_ID", "4a14c09d-bc9f-46f2-9ad9-a728d6ddcbf6")
 BASE_URL             = "https://api.connecteam.com"
 
-# Staff/admin IDs — Amy silently ignores messages from these users
-STAFF_IDS = {"2149475", "9736871", "2201497"}  # Yusuf, Nada, Faduma
-CONVO_LOG_FILE       = "amy_conversation_log.json"
-CONVO_EXPIRY_DAYS    = 7
+STAFF_IDS        = {"2149475", "9736871", "2201497"}  # Yusuf, Nada, Faduma
+CONVO_LOG_FILE   = "amy_conversation_log.json"
+CONVO_EXPIRY_DAYS = 7
 
-conversation_log: dict = {}
+conversation_log  = {}
+_time_clock_id    = None
+_scheduler_id     = None
+_users_cache      = []
+_users_cache_ts   = 0.0
 
 app = FastAPI()
 
@@ -42,7 +55,6 @@ def load_from_github() -> dict:
         )
         if r.ok:
             data = r.json()
-            # Expire entries older than CONVO_EXPIRY_DAYS
             cutoff = time.time() - CONVO_EXPIRY_DAYS * 86400
             return {
                 uid: v for uid, v in data.items()
@@ -68,11 +80,7 @@ def save_to_github(data: dict):
         requests.put(
             f"https://api.github.com/repos/{GITHUB_REPO}/contents/{CONVO_LOG_FILE}",
             headers={"Authorization": f"token {GITHUB_TOKEN}", "Content-Type": "application/json"},
-            json={
-                "message": "chore: update amy conversation log [skip ci]",
-                "content": encoded,
-                "sha": sha,
-            },
+            json={"message": "chore: update amy conversation log [skip ci]", "content": encoded, "sha": sha},
             timeout=15,
         )
         logger.info("Conversation log saved to GitHub")
@@ -87,6 +95,516 @@ async def startup():
     global conversation_log
     conversation_log = load_from_github()
     logger.info(f"Loaded {len(conversation_log)} worker conversation(s) from GitHub")
+    _discover_resource_ids()
+
+
+# ── Connecteam helpers ─────────────────────────────────────────────────────────
+
+def _h():
+    return {"X-API-KEY": CONNECTEAM_API_KEY}
+
+
+def _discover_resource_ids():
+    global _time_clock_id, _scheduler_id
+    if not CONNECTEAM_API_KEY:
+        return
+    try:
+        r = requests.get(f"{BASE_URL}/time-clock/v1/time-clocks", headers=_h(), timeout=10)
+        if r.ok:
+            clocks = r.json().get("data", {}).get("timeClocks", [])
+            if clocks:
+                _time_clock_id = clocks[0].get("id")
+                logger.info(f"Time clock ID: {_time_clock_id}")
+    except Exception as e:
+        logger.warning(f"Time clock discovery failed: {e}")
+    try:
+        r = requests.get(f"{BASE_URL}/scheduler/v1/schedulers", headers=_h(), timeout=10)
+        if r.ok:
+            schedulers = r.json().get("data", {}).get("schedulers", [])
+            if schedulers:
+                _scheduler_id = schedulers[0].get("id")
+                logger.info(f"Scheduler ID: {_scheduler_id}")
+    except Exception as e:
+        logger.warning(f"Scheduler discovery failed: {e}")
+
+
+def _get_users() -> list:
+    global _users_cache, _users_cache_ts
+    if _users_cache and time.time() - _users_cache_ts < 300:
+        return _users_cache
+    try:
+        r = requests.get(f"{BASE_URL}/users/v1/users", headers=_h(), timeout=15)
+        if r.ok:
+            _users_cache = r.json().get("data", {}).get("users", [])
+            _users_cache_ts = time.time()
+    except Exception as e:
+        logger.warning(f"Users fetch failed: {e}")
+    return _users_cache
+
+
+def _uid(obj: dict) -> str:
+    return str(obj.get("id") or obj.get("userId") or obj.get("user_id") or "")
+
+
+def _user_name(user_id, users: list) -> str:
+    s = str(user_id)
+    for u in users:
+        if _uid(u) == s:
+            return f"{u.get('firstName', '')} {u.get('lastName', '')}".strip() or f"User {s}"
+    return f"User {s}"
+
+
+def _find_user(name: str, users: list):
+    nl = name.lower()
+    for u in users:
+        full = f"{u.get('firstName', '')} {u.get('lastName', '')}".lower()
+        if nl in full:
+            return u
+    return None
+
+
+def _parse_dt(s: str):
+    if not s:
+        return None
+    try:
+        return datetime.datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def _fmt(dt) -> str:
+    if not dt:
+        return "?"
+    try:
+        return dt.astimezone(AEST).strftime("%H:%M")
+    except Exception:
+        return str(dt)
+
+
+def _date_range(period: str):
+    today = datetime.date.today()
+    if period == "tomorrow":
+        d = today + datetime.timedelta(days=1)
+        return d.isoformat(), d.isoformat()
+    if period == "yesterday":
+        d = today - datetime.timedelta(days=1)
+        return d.isoformat(), d.isoformat()
+    if period == "last_week":
+        mon = today - datetime.timedelta(days=today.weekday() + 7)
+        return mon.isoformat(), (mon + datetime.timedelta(days=6)).isoformat()
+    if period in ("this_week", "week"):
+        mon = today - datetime.timedelta(days=today.weekday())
+        return mon.isoformat(), (mon + datetime.timedelta(days=6)).isoformat()
+    if period == "this_weekend":
+        days = (5 - today.weekday()) % 7 or 7
+        sat = today + datetime.timedelta(days=days)
+        return sat.isoformat(), (sat + datetime.timedelta(days=1)).isoformat()
+    return today.isoformat(), today.isoformat()
+
+
+# ── Data fetchers ──────────────────────────────────────────────────────────────
+
+def _fetch_time_activities(start: str, end: str, user_ids: list = None) -> list:
+    if not _time_clock_id:
+        _discover_resource_ids()
+    if not _time_clock_id:
+        return []
+    params = {"startDate": start, "endDate": end}
+    if user_ids:
+        params["userIds"] = user_ids
+    try:
+        r = requests.get(
+            f"{BASE_URL}/time-clock/v1/time-clocks/{_time_clock_id}/time-activities",
+            headers=_h(), params=params, timeout=15,
+        )
+        if r.ok:
+            return r.json().get("data", {}).get("timeActivities", [])
+        logger.warning(f"Time activities {r.status_code}: {r.text[:200]}")
+    except Exception as e:
+        logger.warning(f"Time activities failed: {e}")
+    return []
+
+
+def _fetch_shifts(start: str, end: str) -> list:
+    if not _scheduler_id:
+        _discover_resource_ids()
+    if not _scheduler_id:
+        return []
+    try:
+        r = requests.get(
+            f"{BASE_URL}/scheduler/v2/schedulers/{_scheduler_id}/shifts",
+            headers=_h(), params={"startDate": start, "endDate": end}, timeout=15,
+        )
+        if r.ok:
+            return r.json().get("data", {}).get("shifts", [])
+        logger.warning(f"Shifts {r.status_code}: {r.text[:200]}")
+    except Exception as e:
+        logger.warning(f"Shifts failed: {e}")
+    return []
+
+
+def _fetch_time_off() -> list:
+    try:
+        r = requests.get(f"{BASE_URL}/time-off/v1/requests", headers=_h(), timeout=15)
+        if r.ok:
+            return r.json().get("data", {}).get("requests", [])
+    except Exception as e:
+        logger.warning(f"Time off failed: {e}")
+    return []
+
+
+def _fetch_timesheet(start: str, end: str, user_ids: list = None) -> dict:
+    if not _time_clock_id:
+        _discover_resource_ids()
+    if not _time_clock_id:
+        return {}
+    params = {"startDate": start, "endDate": end}
+    if user_ids:
+        params["userIds"] = user_ids
+    try:
+        r = requests.get(
+            f"{BASE_URL}/time-clock/v1/time-clocks/{_time_clock_id}/timesheet",
+            headers=_h(), params=params, timeout=15,
+        )
+        if r.ok:
+            return r.json().get("data", {})
+    except Exception as e:
+        logger.warning(f"Timesheet failed: {e}")
+    return {}
+
+
+def _fetch_tasks() -> list:
+    all_tasks = []
+    try:
+        r = requests.get(f"{BASE_URL}/tasks/v1/taskboards", headers=_h(), timeout=10)
+        if not r.ok:
+            return []
+        boards = r.json().get("data", {}).get("taskBoards", [])
+        for board in boards[:3]:
+            bid = board.get("id")
+            if not bid:
+                continue
+            r2 = requests.get(f"{BASE_URL}/tasks/v1/taskboards/{bid}/tasks", headers=_h(), timeout=15)
+            if r2.ok:
+                tasks = r2.json().get("data", {}).get("tasks", [])
+                for t in tasks:
+                    t["_board"] = board.get("name") or board.get("title") or ""
+                all_tasks.extend(tasks)
+    except Exception as e:
+        logger.warning(f"Tasks failed: {e}")
+    return all_tasks
+
+
+def _fetch_forms() -> list:
+    results = []
+    try:
+        r = requests.get(f"{BASE_URL}/forms/v1/forms", headers=_h(), timeout=10)
+        if not r.ok:
+            return []
+        for form in r.json().get("data", {}).get("forms", [])[:5]:
+            fid = form.get("id")
+            subs = []
+            if fid:
+                sr = requests.get(f"{BASE_URL}/forms/v1/forms/{fid}/form-submissions", headers=_h(), timeout=10)
+                if sr.ok:
+                    subs = sr.json().get("data", {}).get("formSubmissions", [])
+            results.append({"name": form.get("name") or form.get("title") or "Form", "id": fid, "subs": subs})
+    except Exception as e:
+        logger.warning(f"Forms failed: {e}")
+    return results
+
+
+def _fetch_pay_rates(user_id: str = None) -> list:
+    try:
+        r = requests.get(f"{BASE_URL}/pay-rates/v1/pay-rates", headers=_h(), timeout=10)
+        if r.ok:
+            rates = r.json().get("data", {}).get("payRates", [])
+            if user_id:
+                rates = [x for x in rates if str(x.get("userId") or x.get("user_id") or "") == str(user_id)]
+            return rates
+    except Exception as e:
+        logger.warning(f"Pay rates failed: {e}")
+    return []
+
+
+def _fetch_unavailabilities(start: str, end: str) -> list:
+    if not _scheduler_id:
+        return []
+    try:
+        r = requests.get(
+            f"{BASE_URL}/scheduler/v2/schedulers/user-unavailability",
+            headers=_h(), params={"startDate": start, "endDate": end}, timeout=15,
+        )
+        if r.ok:
+            return r.json().get("data", {}).get("userUnavailabilities", [])
+    except Exception as e:
+        logger.warning(f"Unavailabilities failed: {e}")
+    return []
+
+
+# ── Intent detection ───────────────────────────────────────────────────────────
+
+_KW_CLOCK    = {"clock", "clocked", "late", "attendance", "checked in", "check in",
+                "who's in", "who is in", "not in", "on site", "arrived", "clocking",
+                "clock out", "clocked out", "still in", "still clocked"}
+_KW_SCHEDULE = {"shift", "roster", "schedule", "scheduled", "working", "on duty",
+                "rota", "who's on", "who is on", "on shift", "next shift", "start time"}
+_KW_TIME_OFF = {"time off", "leave", "sick", "holiday", "unavailable", "day off",
+                "absence", "absent", "annual leave", "sick leave", "away"}
+_KW_HOURS    = {"hours", "timesheet", "total hours", "worked", "how long",
+                "how many hours", "overtime"}
+_KW_TASKS    = {"task", "to-do", "todo", "overdue", "taskboard", "checklist", "outstanding"}
+_KW_FORMS    = {"form", "submission", "submitted", "filled", "incident", "report form", "completed form"}
+_KW_USERS    = {"staff", "employees", "team members", "list of", "active users", "who are our"}
+_KW_PAY      = {"pay rate", "pay rates", "wage", "wages", "salary", "hourly rate"}
+
+_STOP = {"amy", "hey", "hi", "did", "anyone", "can", "you", "check", "tell", "me",
+         "what", "who", "how", "when", "is", "are", "the", "a", "an", "for", "of",
+         "in", "on", "at", "to", "has", "have", "been", "was", "were", "any", "today",
+         "tomorrow", "yesterday", "this", "last", "week", "weekend", "connect", "care",
+         "there", "their", "they", "just", "please", "could", "would", "should"}
+
+
+def _detect_intent(text: str) -> dict:
+    t = text.lower()
+    intent = {
+        "time_clock": any(k in t for k in _KW_CLOCK),
+        "scheduler":  any(k in t for k in _KW_SCHEDULE),
+        "time_off":   any(k in t for k in _KW_TIME_OFF),
+        "hours":      any(k in t for k in _KW_HOURS),
+        "tasks":      any(k in t for k in _KW_TASKS),
+        "forms":      any(k in t for k in _KW_FORMS),
+        "users":      any(k in t for k in _KW_USERS),
+        "pay":        any(k in t for k in _KW_PAY),
+        "period":     "today",
+        "person":     None,
+    }
+    if "tomorrow" in t:
+        intent["period"] = "tomorrow"
+    elif "yesterday" in t:
+        intent["period"] = "yesterday"
+    elif "last week" in t:
+        intent["period"] = "last_week"
+    elif any(k in t for k in ("this week", "week")):
+        intent["period"] = "this_week"
+    elif any(k in t for k in ("weekend", "saturday", "sunday")):
+        intent["period"] = "this_weekend"
+
+    words = re.findall(r'\b[A-Z][a-z]+\b', text)
+    names = [w for w in words if w.lower() not in _STOP]
+    if names:
+        intent["person"] = " ".join(names)
+
+    return intent
+
+
+# ── Context builder ────────────────────────────────────────────────────────────
+
+def build_context(message_text: str) -> str:
+    intent = _detect_intent(message_text)
+    needs_data = any(intent[k] for k in ("time_clock", "scheduler", "time_off", "hours", "tasks", "forms", "users", "pay"))
+    if not needs_data:
+        return ""
+
+    users  = _get_users()
+    start, end = _date_range(intent["period"])
+    now_aest   = datetime.datetime.now(AEST).strftime("%A, %d %B %Y %H:%M")
+
+    target_uid  = None
+    target_uids = None
+    if intent["person"] and users:
+        u = _find_user(intent["person"], users)
+        if u:
+            target_uid  = _uid(u)
+            target_uids = [int(target_uid)] if target_uid else None
+
+    parts = [f"Current time (AEST): {now_aest}. Data period: {start} to {end}."]
+
+    # ── Clock-in vs scheduled shift comparison ─────────────────────────────────
+    if intent["time_clock"]:
+        activities = _fetch_time_activities(start, end, target_uids)
+        shifts     = _fetch_shifts(start, end)
+
+        act_map   = {}
+        for a in activities:
+            act_map.setdefault(_uid(a), []).append(a)
+
+        shift_map = {}
+        for s in shifts:
+            shift_map.setdefault(_uid(s), []).append(s)
+
+        all_uids = sorted(set(act_map) | set(shift_map))
+        lines = [f"\n=== CLOCK-IN DATA ({start}) ==="]
+        for uid in all_uids:
+            if not uid:
+                continue
+            name = _user_name(uid, users)
+            acts = act_map.get(uid, [])
+            shs  = shift_map.get(uid, [])
+            sch_start = _parse_dt((shs[0].get("startTime") or shs[0].get("start") or "") if shs else "")
+
+            if acts:
+                for a in acts:
+                    ci = _parse_dt(a.get("clockInTime") or a.get("startTime") or a.get("clockIn") or "")
+                    co = _parse_dt(a.get("clockOutTime") or a.get("endTime") or a.get("clockOut") or "")
+                    row = [name]
+                    if ci:
+                        row.append(f"in {_fmt(ci)}")
+                        if sch_start:
+                            diff = int((ci - sch_start).total_seconds() / 60)
+                            if diff > 5:
+                                row.append(f"⚠ {diff}min LATE (sched {_fmt(sch_start)})")
+                            elif diff < -5:
+                                row.append(f"{abs(diff)}min early")
+                            else:
+                                row.append("on time")
+                    if co:
+                        row.append(f"out {_fmt(co)}")
+                    elif ci:
+                        row.append("still clocked in")
+                    lines.append("  " + " | ".join(row))
+            else:
+                sched = f"sched {_fmt(sch_start)}" if sch_start else "scheduled today"
+                lines.append(f"  {name} | NOT clocked in ({sched})")
+
+        if len(lines) == 1:
+            lines.append("  No clock-in records or scheduled shifts found.")
+        parts.append("\n".join(lines))
+
+    # ── Roster / scheduled shifts ──────────────────────────────────────────────
+    elif intent["scheduler"]:
+        shifts = _fetch_shifts(start, end)
+        lines  = [f"\n=== SCHEDULED SHIFTS ({start} to {end}) ==="]
+        for s in shifts:
+            uid  = _uid(s)
+            name = _user_name(uid, users)
+            st   = _parse_dt(s.get("startTime") or s.get("start") or "")
+            et   = _parse_dt(s.get("endTime") or s.get("end") or "")
+            job  = s.get("jobName") or s.get("job") or ""
+            st_s = st.astimezone(AEST).strftime("%a %d %b %H:%M") if st else "?"
+            line = f"  {name}: {st_s} → {_fmt(et)}"
+            if job:
+                line += f" ({job})"
+            lines.append(line)
+        if len(lines) == 1:
+            lines.append("  No shifts found for this period.")
+        parts.append("\n".join(lines))
+
+    # ── Timesheet / hours worked ───────────────────────────────────────────────
+    if intent["hours"]:
+        sheet = _fetch_timesheet(start, end, target_uids)
+        lines = [f"\n=== TIMESHEET ({start} to {end}) ==="]
+        entries = (sheet.get("timesheetEntries") or sheet.get("users") or
+                   sheet.get("entries") or [])
+        if entries:
+            for e in entries:
+                uid   = _uid(e)
+                name  = _user_name(uid, users)
+                total = e.get("totalMinutes") or e.get("total") or e.get("minutes") or 0
+                if isinstance(total, (int, float)) and total > 0:
+                    h, m = divmod(int(total), 60)
+                    lines.append(f"  {name}: {h}h {m}m")
+                else:
+                    lines.append(f"  {name}: {e.get('totalHours') or total}")
+        elif sheet:
+            lines.append(f"  Raw: {json.dumps(sheet)[:400]}")
+        else:
+            lines.append("  No timesheet data found.")
+        parts.append("\n".join(lines))
+
+    # ── Time off requests ──────────────────────────────────────────────────────
+    if intent["time_off"]:
+        reqs  = _fetch_time_off()
+        lines = ["\n=== TIME OFF REQUESTS ==="]
+        for req in reqs[:25]:
+            uid     = _uid(req)
+            name    = _user_name(uid, users)
+            status  = req.get("status") or req.get("approvalStatus") or "?"
+            start_d = req.get("startDate") or req.get("from") or req.get("start") or ""
+            end_d   = req.get("endDate") or req.get("to") or req.get("end") or ""
+            ptype   = req.get("policyTypeName") or req.get("type") or req.get("reason") or ""
+            lines.append(f"  {name}: {ptype} {start_d}–{end_d} [{status}]")
+        if len(lines) == 1:
+            lines.append("  No time off requests found.")
+        parts.append("\n".join(lines))
+
+    # ── Unavailabilities ───────────────────────────────────────────────────────
+        unavail = _fetch_unavailabilities(start, end)
+        if unavail:
+            lines2 = [f"\n=== UNAVAILABILITIES ({start} to {end}) ==="]
+            for u in unavail[:15]:
+                uid   = _uid(u)
+                name  = _user_name(uid, users)
+                start_d = u.get("startDate") or u.get("start") or ""
+                end_d   = u.get("endDate") or u.get("end") or ""
+                reason  = u.get("reason") or u.get("note") or ""
+                lines2.append(f"  {name}: {start_d}–{end_d}" + (f" ({reason})" if reason else ""))
+            parts.append("\n".join(lines2))
+
+    # ── Tasks ──────────────────────────────────────────────────────────────────
+    if intent["tasks"]:
+        tasks = _fetch_tasks()
+        lines = ["\n=== TASKS ==="]
+        for task in tasks[:25]:
+            title  = task.get("title") or task.get("name") or "Untitled"
+            status = task.get("status") or task.get("statusName") or ""
+            board  = task.get("_board", "")
+            due    = task.get("dueDate") or task.get("due_date") or ""
+            a_id   = str(task.get("assigneeId") or task.get("assignedUserId") or "")
+            assignee = _user_name(a_id, users) if a_id else "Unassigned"
+            row = f"  [{status}] {title}"
+            if board:
+                row += f" ({board})"
+            row += f" — {assignee}"
+            if due:
+                row += f" | due {due}"
+            lines.append(row)
+        if len(lines) == 1:
+            lines.append("  No tasks found.")
+        parts.append("\n".join(lines))
+
+    # ── Forms & submissions ────────────────────────────────────────────────────
+    if intent["forms"]:
+        forms_data = _fetch_forms()
+        lines = ["\n=== FORMS & SUBMISSIONS ==="]
+        for fd in forms_data:
+            lines.append(f"  {fd['name']}: {len(fd['subs'])} submission(s)")
+            for sub in fd["subs"][:5]:
+                uid   = _uid(sub)
+                sname = _user_name(uid, users)
+                ts    = sub.get("submittedAt") or sub.get("createdAt") or ""
+                lines.append(f"    - {sname} ({ts[:10] if ts else 'unknown date'})")
+        if len(lines) == 1:
+            lines.append("  No form data found.")
+        parts.append("\n".join(lines))
+
+    # ── Pay rates ──────────────────────────────────────────────────────────────
+    if intent["pay"]:
+        rates = _fetch_pay_rates(target_uid)
+        lines = ["\n=== PAY RATES ==="]
+        for rate in rates[:20]:
+            uid  = _uid(rate)
+            name = _user_name(uid, users)
+            amt  = rate.get("rate") or rate.get("amount") or rate.get("hourlyRate") or "?"
+            rtype = rate.get("type") or rate.get("rateType") or ""
+            lines.append(f"  {name}: ${amt}/hr" + (f" ({rtype})" if rtype else ""))
+        if len(lines) == 1:
+            lines.append("  No pay rate data found.")
+        parts.append("\n".join(lines))
+
+    # ── Team list ──────────────────────────────────────────────────────────────
+    if intent["users"] and not any(intent[k] for k in ("time_clock", "scheduler", "time_off")):
+        lines = ["\n=== TEAM MEMBERS ==="]
+        for u in users:
+            name   = f"{u.get('firstName', '')} {u.get('lastName', '')}".strip()
+            role   = u.get("jobTitle") or u.get("role") or u.get("position") or ""
+            status = u.get("status") or ""
+            lines.append(f"  {name}" + (f" — {role}" if role else "") + (f" [{status}]" if status and status != "active" else ""))
+        if len(lines) == 1:
+            lines.append("  No users found.")
+        parts.append("\n".join(lines))
+
+    return "\n".join(parts)
 
 
 # ── Reply generation ───────────────────────────────────────────────────────────
@@ -127,26 +645,29 @@ Reply as Amy. Rules:
         return "Got it, thanks for letting me know."
 
 
-def generate_manager_reply(manager_first: str, message_text: str) -> str:
+def generate_manager_reply(manager_first: str, message_text: str, context: str = "") -> str:
     if not ANTHROPIC_API_KEY:
         return "On it."
     try:
         import anthropic
         client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        context_block = f"\n\nLive Connecteam data:\n{context}" if context else ""
         resp = client.messages.create(
             model="claude-haiku-4-5",
-            max_tokens=200,
-            messages=[{"role": "user", "content": f"""You are Amy, a compliance coordinator at Connect Care.
-{manager_first} (a manager) just messaged you:
+            max_tokens=400,
+            messages=[{"role": "user", "content": f"""You are Amy, a compliance coordinator at Connect Care (an NDIS disability support provider).
+{manager_first} (a manager) just messaged you in the CC Management chat:
 
-"{message_text}"
+"{message_text}"{context_block}
 
 Reply as Amy. Rules:
-- You know {manager_first} is a manager so be helpful and direct
-- If they're asking about a worker or shift issue, say you'll look into it or confirm what you know
-- If they're giving you an instruction, acknowledge it and confirm you'll action it
-- Casual but professional — like a colleague, not a subordinate
-- 1-3 sentences max
+- You have access to live Connecteam data above — use it to give specific, accurate answers with real names and times
+- If clock-in data is provided, say exactly who was late/on time/missing and by how many minutes
+- If shift data is provided, list who is working and when
+- If no relevant data was found for the question, say so honestly and suggest where to check in Connecteam
+- Never promise to "check and get back" — answer now from the data you have, or say you don't have access to that info
+- Casual but direct — like a helpful colleague
+- 1-5 sentences, be specific not vague
 - No sign-off
 - Output just the message, nothing else"""}],
         )
@@ -156,21 +677,14 @@ Reply as Amy. Rules:
         return "On it."
 
 
-# ── Connecteam helpers ────────────────────────────────────────────────────────
+# ── Connecteam send / lookup ───────────────────────────────────────────────────
 
 def get_worker_name(user_id: str) -> str:
-    """Look up a worker's name from Connecteam. Returns 'Unknown' on failure."""
     try:
-        r = requests.get(
-            f"{BASE_URL}/users/v1/users/{user_id}",
-            headers={"X-API-KEY": CONNECTEAM_API_KEY},
-            timeout=10,
-        )
+        r = requests.get(f"{BASE_URL}/users/v1/users/{user_id}", headers=_h(), timeout=10)
         if r.ok:
             u = (r.json().get("data") or {}).get("user") or r.json().get("data") or {}
-            first = u.get("firstName", "")
-            last  = u.get("lastName", "")
-            name  = f"{first} {last}".strip()
+            name = f"{u.get('firstName', '')} {u.get('lastName', '')}".strip()
             return name or f"User {user_id}"
     except Exception:
         pass
@@ -184,7 +698,7 @@ def send_message(conv_id: str, text: str) -> bool:
     try:
         r = requests.post(
             f"{BASE_URL}/chat/v1/conversations/{conv_id}/message",
-            headers={"X-API-KEY": CONNECTEAM_API_KEY, "Content-Type": "application/json"},
+            headers={**_h(), "Content-Type": "application/json"},
             json={"senderId": int(CONNECTEAM_SENDER_ID), "text": text[:4000]},
             timeout=15,
         )
@@ -198,17 +712,15 @@ def send_message(conv_id: str, text: str) -> bool:
 
 @app.post("/webhook/debug")
 async def debug_webhook(request: Request):
-    """Logs the raw payload and returns it — use to inspect real Connecteam events."""
     try:
         body = await request.body()
         try:
             payload = json.loads(body)
         except Exception:
             payload = {"raw": body.decode(errors="replace")}
-        headers = dict(request.headers)
         logger.info(f"DEBUG PAYLOAD: {json.dumps(payload)}")
-        logger.info(f"DEBUG HEADERS: {json.dumps(headers)}")
-        return JSONResponse({"received": payload, "headers": headers})
+        logger.info(f"DEBUG HEADERS: {json.dumps(dict(request.headers))}")
+        return JSONResponse({"received": payload, "headers": dict(request.headers)})
     except Exception as e:
         return JSONResponse({"error": str(e)})
 
@@ -234,18 +746,15 @@ async def handle_webhook(request: Request):
     conv_id      = str(data.get("conversationId") or data.get("conversation_id") or "")
     message_text = str(data.get("text") or data.get("content") or data.get("message") or "").strip()
 
-    # Ignore Amy's own messages to prevent infinite loops
     if sender_id == str(CONNECTEAM_SENDER_ID):
         return JSONResponse({"status": "self_message"})
 
-    # Staff/management message
     if sender_id in STAFF_IDS:
-        manager_name = get_worker_name(sender_id)
+        manager_name  = get_worker_name(sender_id)
         manager_first = manager_name.split()[0]
-        # Check if this is a tracked worker conversation
+        # In a worker's thread — log the manager note silently
         for uid, convo in conversation_log.items():
             if convo.get("conversation_id") == conv_id:
-                # In a worker's chat — stay silent but log the instruction
                 convo["messages"].append({
                     "sender": "manager",
                     "name": manager_name,
@@ -255,21 +764,22 @@ async def handle_webhook(request: Request):
                 save_to_github(conversation_log)
                 logger.info(f"Manager note from {manager_name} logged in {convo.get('worker_name')} conversation")
                 return JSONResponse({"status": "manager_noted"})
-        # Not a worker thread — manager is talking to Amy directly, so respond
-        logger.info(f"Manager {manager_name} messaged Amy directly — generating reply")
-        reply = generate_manager_reply(manager_first, message_text)
+        # Manager messaging Amy directly — fetch live data if in CC Management chat
+        logger.info(f"Manager {manager_name} messaged Amy directly")
+        context = build_context(message_text) if conv_id == CC_MGMT_CONV_ID else ""
+        if context:
+            logger.info(f"Context built ({len(context)} chars) for: {message_text[:80]}")
+        reply = generate_manager_reply(manager_first, message_text, context)
         send_message(conv_id, reply)
         return JSONResponse({"status": "manager_replied"})
 
-    # If sender not in memory, reload from GitHub in case audit ran since startup
     if sender_id not in conversation_log:
         conversation_log = load_from_github()
-        logger.info(f"Reloaded conversation log from GitHub: {len(conversation_log)} workers")
+        logger.info(f"Reloaded conversation log: {len(conversation_log)} workers")
 
     if sender_id not in conversation_log:
-        # No compliance context — acknowledge the worker and flag to CC Management
         worker_name = get_worker_name(sender_id)
-        logger.info(f"No context for {worker_name} ({sender_id}) — escalating to CC Management")
+        logger.info(f"No context for {worker_name} ({sender_id}) — escalating")
         send_message(conv_id, "Got it, give me a sec.")
         send_message(
             CC_MGMT_CONV_ID,
@@ -284,10 +794,8 @@ async def handle_webhook(request: Request):
     worker_name  = convo.get("worker_name", "worker")
     worker_first = worker_name.split()[0]
 
-    # Append worker's message
     convo["messages"].append({"sender": "worker", "text": message_text, "ts": int(time.time())})
 
-    # Build history for Claude (last 10 messages)
     history = "\n".join(
         f"[Manager - {m.get('name', 'Manager')}]: {m['text']}" if m["sender"] == "manager"
         else f"{'Amy' if m['sender'] == 'amy' else worker_name}: {m['text']}"
@@ -314,4 +822,10 @@ async def handle_webhook(request: Request):
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "workers_tracked": len(conversation_log)}
+    return {
+        "status": "ok",
+        "workers_tracked": len(conversation_log),
+        "time_clock_id": _time_clock_id,
+        "scheduler_id": _scheduler_id,
+        "users_cached": len(_users_cache),
+    }
