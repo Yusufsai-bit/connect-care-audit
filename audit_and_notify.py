@@ -16,7 +16,7 @@ Run manually:
     python audit_and_notify.py
 """
 
-import os, sys, json, hashlib, datetime, requests, random, time
+import os, sys, json, hashlib, datetime, requests, random, time, base64
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 from collections import defaultdict
 
@@ -51,6 +51,43 @@ BASE_URL          = "https://api.connecteam.com"
 NOTIFIED_FILE     = os.path.join(os.path.dirname(os.path.abspath(__file__)), "notified_issues.json")
 CONVO_LOG_FILE    = os.path.join(os.path.dirname(os.path.abspath(__file__)), "amy_conversation_log.json")
 DEDUP_EXPIRY_DAYS = 2   # forget fingerprints older than this
+
+
+# ── Worker profile updater (GitHub-persisted) ─────────────────────────────────
+
+PROFILES_FILE = "worker_profiles.json"
+GITHUB_TOKEN  = os.environ.get("GITHUB_TOKEN", "")
+GITHUB_REPO   = os.environ.get("GITHUB_REPO", "Yusufsai-bit/connect-care-audit")
+
+
+def _update_worker_profile_gh(uid: str, updates: dict):
+    """Read-modify-write worker_profiles.json on GitHub."""
+    if not GITHUB_TOKEN:
+        return
+    try:
+        gh_headers = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github.v3+json"}
+        r = requests.get(
+            f"https://api.github.com/repos/{GITHUB_REPO}/contents/{PROFILES_FILE}",
+            headers=gh_headers, timeout=10,
+        )
+        if r.ok:
+            body = json.loads(base64.b64decode(r.json()["content"]).decode())
+            sha  = r.json().get("sha", "")
+        else:
+            body, sha = {}, ""
+        existing = body.get(uid, {})
+        existing.update(updates)
+        body[uid] = existing
+        content = base64.b64encode(json.dumps(body, indent=2).encode()).decode()
+        payload = {"message": "chore: update worker profiles [skip ci]", "content": content}
+        if sha:
+            payload["sha"] = sha
+        requests.put(
+            f"https://api.github.com/repos/{GITHUB_REPO}/contents/{PROFILES_FILE}",
+            headers=gh_headers, json=payload, timeout=15,
+        )
+    except Exception as e:
+        print(f"  [WARN] Worker profile update failed: {e}")
 
 
 # ── Conversation log (for Amy smart reply) ────────────────────────────────────
@@ -233,6 +270,64 @@ def _add_critical_profile_notes(issues: list, name_to_uid: dict, now: datetime):
         print(f"Critical breach notes added to {noted} worker profile(s).")
 
 
+# ── No-reply 48-hour escalation ───────────────────────────────────────────────
+
+def check_unacknowledged_escalations(now: datetime.datetime, notified: dict, dry_run: bool):
+    """
+    Find CRITICAL issues sent 48+ hours ago with no worker acknowledgement.
+    Post to CC Management and log a formal notice to the worker's Connecteam profile.
+    """
+    threshold = int((now - datetime.timedelta(hours=48)).timestamp())
+    unacked   = {}  # worker_name -> [category, ...]
+
+    for fp, v in notified.items():
+        if not isinstance(v, dict):
+            continue
+        if v.get("acknowledged"):
+            continue
+        sent_ts = v.get("sent_ts")
+        if not sent_ts or sent_ts > threshold:
+            continue
+        wname = v.get("worker", "Unknown")
+        cat   = v.get("category", "compliance issue")
+        unacked.setdefault(wname, []).append(cat)
+
+    if not unacked:
+        print("No-reply check: all CRITICAL issues acknowledged within 48h.")
+        return
+
+    print(f"\nNo-reply escalation: {len(unacked)} worker(s) have not responded in 48+ hours.")
+
+    lines = ["⚠️ 48-hour no-reply escalation:\n"]
+    for wname, cats in unacked.items():
+        lines.append(f"• {wname} — {', '.join(cats[:3])} — no reply in 48h")
+    lines.append("\nAction required: please follow up with each worker directly or assign a formal notice.")
+    msg = "\n".join(lines)
+
+    if not dry_run:
+        sender_id = int(CONNECTEAM_SENDER_ID or "0")
+        if sender_id and CONNECTEAM_API_KEY:
+            try:
+                requests.post(
+                    f"https://api.connecteam.com/chat/v1/conversations/{CC_MGMT_CONV_ID}/message",
+                    headers={"X-API-KEY": CONNECTEAM_API_KEY, "Content-Type": "application/json"},
+                    json={"senderId": sender_id, "text": msg[:4000]},
+                    timeout=15,
+                )
+                print("  Posted 48h no-reply escalation to CC Management.")
+            except Exception as e:
+                print(f"  [ERROR] Failed to post escalation: {e}")
+    else:
+        print(f"  [DRY RUN] Would post: {msg[:200]}")
+
+    # Mark escalated so we don't repeat next run
+    for fp, v in notified.items():
+        if isinstance(v, dict) and not v.get("acknowledged") and v.get("worker") in unacked:
+            sent_ts = v.get("sent_ts")
+            if sent_ts and sent_ts <= threshold:
+                v["escalated_48h"] = True
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
@@ -250,10 +345,13 @@ def main():
     print(f"Auditing last {DAYS_BACK} day(s) | dry_run={dry_run}")
     print(f"{'='*60}\n")
 
-    issues = run_audit(DAYS_BACK)
-
     notified = load_notified()
     print(f"Loaded {len(notified)} existing fingerprints from dedup cache.\n")
+
+    # ── Check for 48h no-reply escalations before running new audit ──────────
+    check_unacknowledged_escalations(now, notified, dry_run)
+
+    issues = run_audit(DAYS_BACK)
 
     # Build user ID lookup
     users        = fetch_all_users()
@@ -334,15 +432,28 @@ def main():
             if ok:
                 print(f"  ✓ Sent to {worker_name}")
                 sent_ok.append(worker_name)
+                issue_summary = "; ".join(
+                    f"{i.category} ({i.client or 'N/A'})" for i in worker_issues[:3]
+                )
                 for iss in worker_issues:
                     fp = issue_fingerprint(iss)
-                    notified[fp] = {"date": now.strftime("%Y-%m-%d"), "worker": worker_name}
+                    notified[fp] = {
+                        "date": now.strftime("%Y-%m-%d"), "worker": worker_name,
+                        "sent_ts": int(now.timestamp()), "acknowledged": False,
+                    }
                 # Save to conversation log so smart reply has context
                 convo_log[str(uid)] = {
                     "worker_name":     worker_name,
                     "conversation_id": conv_map.get(str(uid), ""),
                     "messages": [{"sender": "amy", "text": message, "ts": int(now.timestamp())}],
                 }
+                # Update persistent worker profile so Amy remembers this issue
+                _update_worker_profile_gh(str(uid), {
+                    "worker_name":       worker_name,
+                    "last_issue_date":   now.strftime("%d %b %Y"),
+                    "last_issue_summary": issue_summary,
+                    "open_issues": [i.category for i in worker_issues if i.severity == "CRITICAL"],
+                })
             else:
                 print(f"  ✗ Failed {worker_name}: {result}")
                 sent_err.append(worker_name)

@@ -116,39 +116,74 @@ def _worker_send(user_id, msg, force=False):
     return send_connecteam_chat(user_id, msg)
 
 
-def load_pending_relay():
+def _gh_load(filename, default):
+    """Load a JSON file from GitHub, falling back to local disk, then default."""
+    if GITHUB_TOKEN:
+        try:
+            import base64
+            r = requests.get(
+                f"https://api.github.com/repos/{GITHUB_REPO}/contents/{filename}",
+                headers={"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github.v3+json"},
+                timeout=15,
+            )
+            if r.ok:
+                return json.loads(base64.b64decode(r.json()["content"]).decode())
+        except Exception as e:
+            print(f"[WARN] GitHub load failed for {filename}: {e}")
     try:
-        with open(PENDING_RELAY_FILE, "r", encoding="utf-8") as f:
+        local = os.path.join(os.path.dirname(__file__) or ".", filename)
+        with open(local, "r", encoding="utf-8") as f:
             return json.load(f)
     except Exception:
-        return []
+        return default
+
+
+def _gh_save(filename, data):
+    """Save JSON to local disk and GitHub so it survives Railway redeploys."""
+    local = os.path.join(os.path.dirname(__file__) or ".", filename)
+    try:
+        with open(local, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        print(f"[WARN] Local save failed for {filename}: {e}")
+    if GITHUB_TOKEN:
+        try:
+            import base64
+            headers = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github.v3+json"}
+            r = requests.get(
+                f"https://api.github.com/repos/{GITHUB_REPO}/contents/{filename}",
+                headers=headers, timeout=15,
+            )
+            sha     = r.json().get("sha", "") if r.ok else ""
+            content = base64.b64encode(json.dumps(data, indent=2).encode()).decode()
+            payload = {"message": f"chore: update {filename} [skip ci]", "content": content}
+            if sha:
+                payload["sha"] = sha
+            requests.put(
+                f"https://api.github.com/repos/{GITHUB_REPO}/contents/{filename}",
+                headers=headers, json=payload, timeout=15,
+            )
+        except Exception as e:
+            print(f"[WARN] GitHub save failed for {filename}: {e}")
+
+
+def load_pending_relay():
+    return _gh_load("pending_relay_queue.json", [])
 
 
 def save_pending_relay(queue):
-    try:
-        with open(PENDING_RELAY_FILE, "w", encoding="utf-8") as f:
-            json.dump(queue, f, indent=2)
-    except Exception as e:
-        print(f"[WARN] Could not save relay queue: {e}")
+    _gh_save("pending_relay_queue.json", queue)
 
 
 def load_shift_notified():
     """Load persisted shift-notification keys; prune entries older than 24h."""
-    try:
-        with open(SHIFT_NOTIFIED_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        cutoff = time.time() - 86400
-        return {k: v for k, v in data.items() if v >= cutoff}
-    except Exception:
-        return {}
+    data   = _gh_load("shift_notified.json", {})
+    cutoff = time.time() - 86400
+    return {k: v for k, v in data.items() if v >= cutoff}
 
 
 def save_shift_notified(mapping):
-    try:
-        with open(SHIFT_NOTIFIED_FILE, "w", encoding="utf-8") as f:
-            json.dump(mapping, f, indent=2)
-    except Exception as e:
-        print(f"[WARN] Could not save shift-notified log: {e}")
+    _gh_save("shift_notified.json", mapping)
 
 
 # Queue of complex worker replies waiting for a manager response from CC Management.
@@ -165,19 +200,11 @@ AMY_MEMORY_FILE = os.path.join(os.path.dirname(__file__) or ".", "amy_conversati
 
 
 def load_amy_memory():
-    try:
-        with open(AMY_MEMORY_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return {}
+    return _gh_load("amy_conversation_log.json", {})
 
 
 def save_amy_memory(memory):
-    try:
-        with open(AMY_MEMORY_FILE, "w", encoding="utf-8") as f:
-            json.dump(memory, f, indent=2)
-    except Exception:
-        pass
+    _gh_save("amy_conversation_log.json", memory)
 
 
 def get_conversation_history(user_id, n=8):

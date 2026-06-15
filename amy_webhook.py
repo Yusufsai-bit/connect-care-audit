@@ -609,19 +609,106 @@ def build_context(message_text: str) -> str:
     return "\n".join(parts)
 
 
+# ── Worker profiles (persistent memory across sessions) ───────────────────────
+
+PROFILES_FILE = "worker_profiles.json"
+_profiles_cache: dict = {}
+_profiles_loaded = False
+
+
+def _load_profiles() -> dict:
+    global _profiles_cache, _profiles_loaded
+    if _profiles_loaded:
+        return _profiles_cache
+    try:
+        r = requests.get(
+            f"https://raw.githubusercontent.com/{GITHUB_REPO}/main/{PROFILES_FILE}",
+            timeout=10,
+        )
+        _profiles_cache = r.json() if r.ok else {}
+    except Exception:
+        _profiles_cache = {}
+    _profiles_loaded = True
+    return _profiles_cache
+
+
+def _save_profiles(profiles: dict):
+    global _profiles_cache
+    _profiles_cache = profiles
+    if not GITHUB_TOKEN:
+        return
+    try:
+        import base64
+        headers = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github.v3+json"}
+        r = requests.get(
+            f"https://api.github.com/repos/{GITHUB_REPO}/contents/{PROFILES_FILE}",
+            headers=headers, timeout=10,
+        )
+        sha     = r.json().get("sha", "") if r.ok else ""
+        content = base64.b64encode(json.dumps(profiles, indent=2).encode()).decode()
+        payload = {"message": "chore: update worker profiles [skip ci]", "content": content}
+        if sha:
+            payload["sha"] = sha
+        requests.put(
+            f"https://api.github.com/repos/{GITHUB_REPO}/contents/{PROFILES_FILE}",
+            headers=headers, json=payload, timeout=15,
+        )
+    except Exception as e:
+        logger.warning(f"Failed to save worker profiles: {e}")
+
+
+def get_worker_profile(worker_id: str, worker_name: str) -> dict:
+    profiles = _load_profiles()
+    return profiles.get(worker_id, {
+        "worker_name": worker_name,
+        "last_issue_date": None,
+        "last_issue_summary": None,
+        "open_issues": [],
+        "reply_count": 0,
+        "no_reply_count": 0,
+        "credential_status": None,
+        "notes": "",
+    })
+
+
+def update_worker_profile(worker_id: str, updates: dict):
+    profiles = _load_profiles()
+    existing = profiles.get(worker_id, {})
+    existing.update(updates)
+    profiles[worker_id] = existing
+    _save_profiles(profiles)
+
+
+def _build_profile_context(profile: dict) -> str:
+    """Build a short profile summary to inject into Amy's prompt."""
+    lines = []
+    if profile.get("last_issue_date"):
+        lines.append(f"Last compliance issue: {profile['last_issue_date']}")
+    if profile.get("last_issue_summary"):
+        lines.append(f"Issue summary: {profile['last_issue_summary']}")
+    if profile.get("open_issues"):
+        lines.append(f"Still unresolved: {', '.join(profile['open_issues'][:3])}")
+    if profile.get("credential_status"):
+        lines.append(f"Credential status: {profile['credential_status']}")
+    if profile.get("no_reply_count", 0) > 1:
+        lines.append(f"Note: has ignored {profile['no_reply_count']} previous compliance messages without replying.")
+    return "\n".join(lines) if lines else ""
+
+
 # ── Reply generation ───────────────────────────────────────────────────────────
 
-def generate_reply(worker_first: str, history: str) -> str:
+def generate_reply(worker_first: str, history: str, profile_context: str = "") -> str:
     if not ANTHROPIC_API_KEY:
         return "Got it, thanks for letting me know."
     try:
         import anthropic
         client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        profile_block = f"\n\nWorker history:\n{profile_context}" if profile_context else ""
         resp = client.messages.create(
             model="claude-haiku-4-5",
             max_tokens=200,
             messages=[{"role": "user", "content": f"""You are Amy, a coordinator at Connect Care (an NDIS disability support provider).
-You previously sent a compliance message to {worker_first} about issues from their shift.
+You previously sent a compliance message to {worker_first} about issues from their shift.{profile_block}
 
 Conversation so far:
 {history}
@@ -826,7 +913,14 @@ async def handle_webhook(request: Request):
         for m in convo["messages"][-10:]
     )
 
-    reply = generate_reply(worker_first, history)
+    profile         = get_worker_profile(sender_id, worker_name)
+    profile_context = _build_profile_context(profile)
+    update_worker_profile(sender_id, {
+        "worker_name": worker_name,
+        "reply_count": profile.get("reply_count", 0) + 1,
+    })
+
+    reply = generate_reply(worker_first, history, profile_context)
 
     target_conv_id = convo.get("conversation_id") or conv_id
     if not target_conv_id:
