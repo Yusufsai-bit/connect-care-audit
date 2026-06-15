@@ -19,6 +19,7 @@ CONNECTEAM_SENDER_ID = os.environ.get("CONNECTEAM_SENDER_ID", "")
 ANTHROPIC_API_KEY    = os.environ.get("ANTHROPIC_API_KEY", "")
 GITHUB_TOKEN         = os.environ.get("GITHUB_TOKEN", "")
 GITHUB_REPO          = os.environ.get("GITHUB_REPO", "Yusufsai-bit/connect-care-audit")
+CC_MGMT_CONV_ID      = os.environ.get("CC_MGMT_CONV_ID", "4a14c09d-bc9f-46f2-9ad9-a728d6ddcbf6")
 BASE_URL             = "https://api.connecteam.com"
 CONVO_LOG_FILE       = "amy_conversation_log.json"
 CONVO_EXPIRY_DAYS    = 7
@@ -118,7 +119,26 @@ Reply as Amy. Rules:
         return "Got it, thanks for letting me know."
 
 
-# ── Connecteam send ────────────────────────────────────────────────────────────
+# ── Connecteam helpers ────────────────────────────────────────────────────────
+
+def get_worker_name(user_id: str) -> str:
+    """Look up a worker's name from Connecteam. Returns 'Unknown' on failure."""
+    try:
+        r = requests.get(
+            f"{BASE_URL}/users/v1/users/{user_id}",
+            headers={"X-API-KEY": CONNECTEAM_API_KEY},
+            timeout=10,
+        )
+        if r.ok:
+            u = (r.json().get("data") or {}).get("user") or r.json().get("data") or {}
+            first = u.get("firstName", "")
+            last  = u.get("lastName", "")
+            name  = f"{first} {last}".strip()
+            return name or f"User {user_id}"
+    except Exception:
+        pass
+    return f"User {user_id}"
+
 
 def send_message(conv_id: str, text: str) -> bool:
     if not CONNECTEAM_API_KEY or not CONNECTEAM_SENDER_ID:
@@ -141,6 +161,7 @@ def send_message(conv_id: str, text: str) -> bool:
 
 @app.post("/webhook/connecteam")
 async def handle_webhook(request: Request):
+    global conversation_log
     try:
         payload = await request.json()
     except Exception:
@@ -163,13 +184,19 @@ async def handle_webhook(request: Request):
 
     # If sender not in memory, reload from GitHub in case audit ran since startup
     if sender_id not in conversation_log:
-        global conversation_log
         conversation_log = load_from_github()
         logger.info(f"Reloaded conversation log from GitHub: {len(conversation_log)} workers")
 
     if sender_id not in conversation_log:
-        logger.info(f"No context for user {sender_id} — ignoring")
-        return JSONResponse({"status": "no_context"})
+        # No compliance context — acknowledge the worker and flag to CC Management
+        worker_name = get_worker_name(sender_id)
+        logger.info(f"No context for {worker_name} ({sender_id}) — escalating to CC Management")
+        send_message(conv_id, "Got it, give me a sec.")
+        send_message(
+            CC_MGMT_CONV_ID,
+            f"{worker_name} just messaged Amy:\n\n\"{message_text}\"\n\nNo compliance context on file — what should she reply?"
+        )
+        return JSONResponse({"status": "escalated_to_management"})
 
     if not message_text:
         return JSONResponse({"status": "empty_message"})

@@ -4,4 +4,4 @@ twilio
 tzdata
 openpyxl
 fastapi
-uvicorn[standard]
+uvicorn
