@@ -161,6 +161,12 @@ async def handle_webhook(request: Request):
     if sender_id == str(CONNECTEAM_SENDER_ID):
         return JSONResponse({"status": "self_message"})
 
+    # If sender not in memory, reload from GitHub in case audit ran since startup
+    if sender_id not in conversation_log:
+        global conversation_log
+        conversation_log = load_from_github()
+        logger.info(f"Reloaded conversation log from GitHub: {len(conversation_log)} workers")
+
     if sender_id not in conversation_log:
         logger.info(f"No context for user {sender_id} — ignoring")
         return JSONResponse({"status": "no_context"})
