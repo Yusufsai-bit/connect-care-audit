@@ -16,7 +16,7 @@ Run manually:
     python audit_and_notify.py
 """
 
-import os, sys, json, hashlib, datetime, requests
+import os, sys, json, hashlib, datetime, requests, random, time
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 from collections import defaultdict
 
@@ -181,6 +181,11 @@ def post_to_management(text: str):
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
+    # Random delay so messages don't always land at the exact same time each day
+    delay = random.randint(0, 25 * 60)  # 0–25 minutes in seconds
+    print(f"Waiting {delay // 60}m {delay % 60}s before sending (randomised)...")
+    time.sleep(delay)
+
     now        = datetime.datetime.now(AEST)
     run_label  = now.strftime("%a %d %b, %I:%M %p AEST")
     dry_run    = not bool(CONNECTEAM_SENDER_ID)
