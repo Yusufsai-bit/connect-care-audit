@@ -21,6 +21,9 @@ GITHUB_TOKEN         = os.environ.get("GITHUB_TOKEN", "")
 GITHUB_REPO          = os.environ.get("GITHUB_REPO", "Yusufsai-bit/connect-care-audit")
 CC_MGMT_CONV_ID      = os.environ.get("CC_MGMT_CONV_ID", "4a14c09d-bc9f-46f2-9ad9-a728d6ddcbf6")
 BASE_URL             = "https://api.connecteam.com"
+
+# Staff/admin IDs — Amy silently ignores messages from these users
+STAFF_IDS = {"2149475", "9736871", "2201497"}  # Yusuf, Nada, Faduma
 CONVO_LOG_FILE       = "amy_conversation_log.json"
 CONVO_EXPIRY_DAYS    = 7
 
@@ -185,6 +188,10 @@ async def handle_webhook(request: Request):
     # Ignore Amy's own messages to prevent infinite loops
     if sender_id == str(CONNECTEAM_SENDER_ID):
         return JSONResponse({"status": "self_message"})
+
+    # Ignore messages from staff/management — they don't need Amy to reply to them
+    if sender_id in STAFF_IDS:
+        return JSONResponse({"status": "staff_ignored"})
 
     # If sender not in memory, reload from GitHub in case audit ran since startup
     if sender_id not in conversation_log:
