@@ -925,16 +925,8 @@ def handle_chat_reply(data):
                 _post_to_cc_mgmt(PENDING_RELAY_QUEUE[0])
             return
 
-        # Case B: direct instruction to Amy — e.g. "Amy, message Abdi about his GPS"
-        # Detect: starts with "Amy" or "amy" or "@Amy", and mentions a known worker.
-        is_amy_instruction = (
-            text_lower.startswith("amy") or
-            text_lower.startswith("@amy") or
-            "amy," in text_lower or
-            "amy " in text_lower[:20]
-        )
-        if is_amy_instruction:
-            _handle_manager_instruction(text)
+        # Amy's Render webhook (connect-care-audit.onrender.com) handles direct
+        # queries to Amy in CC Management — Railway only handles the relay queue above.
         return
 
     # ── Ignore other observer messages ────────────────────────────────────────
