@@ -738,7 +738,9 @@ async def handle_webhook(request: Request):
     event_type = payload.get("eventType", "")
     logger.info(f"Webhook received: {event_type} | full payload: {json.dumps(payload)}")
 
-    if event_type != "chat_message_created":
+    # Accept all known Connecteam chat event type formats
+    _et = event_type.lower().replace(" ", "_")
+    if _et not in ("message_created", "chat_message_created", "chatmessagecreated"):
         return JSONResponse({"status": "ignored"})
 
     data         = payload.get("data", {})
@@ -746,30 +748,29 @@ async def handle_webhook(request: Request):
     conv_id      = str(data.get("conversationId") or data.get("conversation_id") or "")
     message_text = str(data.get("text") or data.get("content") or data.get("message") or "").strip()
 
+    # Amy only handles CC Management — Railway webhook covers worker messages
+    if conv_id != CC_MGMT_CONV_ID:
+        return JSONResponse({"status": "ignored_not_cc_mgmt"})
+
     if sender_id == str(CONNECTEAM_SENDER_ID):
         return JSONResponse({"status": "self_message"})
 
     if sender_id in STAFF_IDS:
         manager_name  = get_worker_name(sender_id)
         manager_first = manager_name.split()[0]
-        # In a worker's thread — log the manager note silently
-        for uid, convo in conversation_log.items():
-            if convo.get("conversation_id") == conv_id:
-                convo["messages"].append({
-                    "sender": "manager",
-                    "name": manager_name,
-                    "text": message_text,
-                    "ts": int(time.time()),
-                })
-                save_to_github(conversation_log)
-                logger.info(f"Manager note from {manager_name} logged in {convo.get('worker_name')} conversation")
-                return JSONResponse({"status": "manager_noted"})
-        # Manager messaging Amy directly — fetch live data if in CC Management chat
-        logger.info(f"Manager {manager_name} messaged Amy directly")
-        context = build_context(message_text) if conv_id == CC_MGMT_CONV_ID else ""
+        logger.info(f"Manager {manager_name} in CC Management: {message_text[:80]}")
+        try:
+            context = build_context(message_text)
+        except Exception as e:
+            logger.error(f"build_context failed: {e}")
+            context = ""
         if context:
-            logger.info(f"Context built ({len(context)} chars) for: {message_text[:80]}")
-        reply = generate_manager_reply(manager_first, message_text, context)
+            logger.info(f"Context built ({len(context)} chars)")
+        try:
+            reply = generate_manager_reply(manager_first, message_text, context)
+        except Exception as e:
+            logger.error(f"generate_manager_reply failed: {e}")
+            reply = "Something went wrong on my end — try again in a sec."
         send_message(conv_id, reply)
         return JSONResponse({"status": "manager_replied"})
 
