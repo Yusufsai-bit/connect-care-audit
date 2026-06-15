@@ -127,6 +127,35 @@ Reply as Amy. Rules:
         return "Got it, thanks for letting me know."
 
 
+def generate_manager_reply(manager_first: str, message_text: str) -> str:
+    if not ANTHROPIC_API_KEY:
+        return "On it."
+    try:
+        import anthropic
+        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        resp = client.messages.create(
+            model="claude-haiku-4-5",
+            max_tokens=200,
+            messages=[{"role": "user", "content": f"""You are Amy, a compliance coordinator at Connect Care.
+{manager_first} (a manager) just messaged you:
+
+"{message_text}"
+
+Reply as Amy. Rules:
+- You know {manager_first} is a manager so be helpful and direct
+- If they're asking about a worker or shift issue, say you'll look into it or confirm what you know
+- If they're giving you an instruction, acknowledge it and confirm you'll action it
+- Casual but professional — like a colleague, not a subordinate
+- 1-3 sentences max
+- No sign-off
+- Output just the message, nothing else"""}],
+        )
+        return resp.content[0].text.strip()
+    except Exception as e:
+        logger.error(f"Claude manager reply failed: {e}")
+        return "On it."
+
+
 # ── Connecteam helpers ────────────────────────────────────────────────────────
 
 def get_worker_name(user_id: str) -> str:
@@ -190,12 +219,14 @@ async def handle_webhook(request: Request):
     if sender_id == str(CONNECTEAM_SENDER_ID):
         return JSONResponse({"status": "self_message"})
 
-    # Staff/management message — stay silent but log it as context for Amy
+    # Staff/management message
     if sender_id in STAFF_IDS:
         manager_name = get_worker_name(sender_id)
-        # Find which worker's conversation this belongs to by conversation ID
+        manager_first = manager_name.split()[0]
+        # Check if this is a tracked worker conversation
         for uid, convo in conversation_log.items():
             if convo.get("conversation_id") == conv_id:
+                # In a worker's chat — stay silent but log the instruction
                 convo["messages"].append({
                     "sender": "manager",
                     "name": manager_name,
@@ -204,8 +235,12 @@ async def handle_webhook(request: Request):
                 })
                 save_to_github(conversation_log)
                 logger.info(f"Manager note from {manager_name} logged in {convo.get('worker_name')} conversation")
-                break
-        return JSONResponse({"status": "manager_noted"})
+                return JSONResponse({"status": "manager_noted"})
+        # Not a worker thread — manager is talking to Amy directly, so respond
+        logger.info(f"Manager {manager_name} messaged Amy directly — generating reply")
+        reply = generate_manager_reply(manager_first, message_text)
+        send_message(conv_id, reply)
+        return JSONResponse({"status": "manager_replied"})
 
     # If sender not in memory, reload from GitHub in case audit ran since startup
     if sender_id not in conversation_log:
