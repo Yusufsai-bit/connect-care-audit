@@ -194,6 +194,25 @@ def send_message(conv_id: str, text: str) -> bool:
         return False
 
 
+# ── Debug endpoint ─────────────────────────────────────────────────────────────
+
+@app.post("/webhook/debug")
+async def debug_webhook(request: Request):
+    """Logs the raw payload and returns it — use to inspect real Connecteam events."""
+    try:
+        body = await request.body()
+        try:
+            payload = json.loads(body)
+        except Exception:
+            payload = {"raw": body.decode(errors="replace")}
+        headers = dict(request.headers)
+        logger.info(f"DEBUG PAYLOAD: {json.dumps(payload)}")
+        logger.info(f"DEBUG HEADERS: {json.dumps(headers)}")
+        return JSONResponse({"received": payload, "headers": headers})
+    except Exception as e:
+        return JSONResponse({"error": str(e)})
+
+
 # ── Webhook endpoint ───────────────────────────────────────────────────────────
 
 @app.post("/webhook/connecteam")
@@ -205,7 +224,7 @@ async def handle_webhook(request: Request):
         raise HTTPException(status_code=400, detail="Invalid JSON")
 
     event_type = payload.get("eventType", "")
-    logger.info(f"Webhook received: {event_type}")
+    logger.info(f"Webhook received: {event_type} | full payload: {json.dumps(payload)}")
 
     if event_type != "chat_message_created":
         return JSONResponse({"status": "ignored"})
