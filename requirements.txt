@@ -3,3 +3,5 @@ anthropic
 twilio
 tzdata
 openpyxl
+fastapi
+uvicorn[standard]
