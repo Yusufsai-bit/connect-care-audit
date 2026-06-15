@@ -23,6 +23,7 @@ from collections import defaultdict
 from connecteam_audit import (
     run_audit, fetch_all_users,
     send_worker_message, load_worker_conversations,
+    lock_worker_days, add_worker_note,
     CONNECTEAM_SENDER_ID, CONNECTEAM_API_KEY,
     AEST,
 )
@@ -32,10 +33,10 @@ from connecteam_audit import (
 DAYS_BACK         = 1          # always look back 24 hours; dedup handles overlap
 NOTIFY_SEVERITIES = {"CRITICAL", "HIGH"}
 
-# These are handled by daily_notify.py — skip here to avoid double-messaging
-SKIP_CATEGORIES = {
-    "EXPIRED CREDENTIAL", "CREDENTIAL EXPIRING SOON",
-}
+SKIP_CATEGORIES = set()  # nothing skipped — credentials handled here now
+
+CRED_CATEGORIES = {"EXPIRED CREDENTIAL", "CREDENTIAL EXPIRING SOON"}
+CRED_DEDUP_DAYS = 7   # don't re-notify about same credential issue within this window
 
 # Rostering/management issues — go to CC Management only, never to the individual worker
 MANAGEMENT_ONLY_CATEGORIES = {
@@ -178,6 +179,57 @@ def post_to_management(text: str):
         print(f"  [ERROR] CC Management post: {e}")
 
 
+# ── Credential message ────────────────────────────────────────────────────────
+
+def build_credential_message(worker_name: str, cred_issues: list) -> str:
+    first = worker_name.split()[0]
+    SEV_ICON = {"CRITICAL": "🔴", "HIGH": "🟠", "MEDIUM": "🟡"}
+    lines = [f"Hi {first},", "", "Your NDIS worker credentials need attention:", ""]
+    for iss in cred_issues:
+        icon = SEV_ICON.get(iss.severity, "🟡")
+        lines.append(f"{icon} {iss.detail}")
+    lines += ["", "Please action these as soon as possible and let me know once renewed.", "", "Cheers"]
+    return "\n".join(lines)
+
+
+# ── Time entry locking ────────────────────────────────────────────────────────
+
+def _lock_prior_days(name_to_uid: dict, now: datetime):
+    """Lock time entries older than 3 days to prevent backdating."""
+    lock_date = (now - timedelta(days=3)).strftime("%Y-%m-%d")
+    locked = 0
+    for uid in name_to_uid.values():
+        ok, _ = lock_worker_days(uid, [lock_date])
+        if ok:
+            locked += 1
+    if locked:
+        print(f"Locked time entries for {locked} worker(s) on {lock_date}.")
+
+
+# ── CRITICAL profile notes ────────────────────────────────────────────────────
+
+def _add_critical_profile_notes(issues: list, name_to_uid: dict, now: datetime):
+    """Write a permanent note to the worker's Connecteam profile for CRITICAL breaches."""
+    by_worker = defaultdict(list)
+    for iss in issues:
+        if iss.severity == "CRITICAL":
+            by_worker[iss.worker].append(iss)
+
+    noted = 0
+    for wname, crit_issues in by_worker.items():
+        uid = name_to_uid.get(wname)
+        if not uid:
+            continue
+        lines = [f"[{now.strftime('%d %b %Y')} — Automated Audit]"]
+        for iss in crit_issues[:5]:
+            lines.append(f"CRITICAL — {iss.category}: {iss.client} on {iss.date}. {iss.detail}")
+        ok, _ = add_worker_note(uid, "\n".join(lines))
+        if ok:
+            noted += 1
+    if noted:
+        print(f"Critical breach notes added to {noted} worker profile(s).")
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
@@ -209,17 +261,30 @@ def main():
 
     # Separate worker issues from team-level issues
     worker_new_issues = defaultdict(list)   # worker_name -> [Issue, ...]
+    cred_new_issues   = defaultdict(list)   # worker_name -> [Issue, ...] (credential only)
     team_new_issues   = []
 
     TEAM_NAMES = {"(team)", "unknown", ""}
 
+    # Credential dedup — don't re-notify within CRED_DEDUP_DAYS
+    cred_cutoff = (datetime.datetime.now(AEST) - datetime.timedelta(days=CRED_DEDUP_DAYS)).strftime("%Y-%m-%d")
+    recent_cred_fps = {fp for fp, v in notified.items() if v.get("cred") and v.get("date", "") >= cred_cutoff}
+
     for iss in issues:
-        if iss.severity not in NOTIFY_SEVERITIES:
+        if iss.severity not in NOTIFY_SEVERITIES and not (
+            iss.severity == "MEDIUM" and iss.category in CRED_CATEGORIES
+        ):
             continue
         if iss.category in SKIP_CATEGORIES:
             continue
 
         fp = issue_fingerprint(iss)
+
+        if iss.category in CRED_CATEGORIES:
+            if fp not in recent_cred_fps:
+                cred_new_issues[iss.worker].append(iss)
+            continue  # credentials handled separately below
+
         if fp in notified:
             continue  # already messaged
 
@@ -230,6 +295,8 @@ def main():
 
     print(f"New worker-level issues: {sum(len(v) for v in worker_new_issues.values())} "
           f"across {len(worker_new_issues)} worker(s)")
+    print(f"New credential issues:   {sum(len(v) for v in cred_new_issues.values())} "
+          f"across {len(cred_new_issues)} worker(s)")
     print(f"New team-level issues:   {len(team_new_issues)}\n")
 
     # ── Message each worker ───────────────────────────────────────────────────
@@ -273,6 +340,28 @@ def main():
 
     save_convo_log(convo_log)
 
+    # ── Credential expiry notifications ───────────────────────────────────────
+    cred_sent = []
+    for worker_name, cred_issues in sorted(cred_new_issues.items()):
+        uid = name_to_uid.get(worker_name)
+        if not uid:
+            print(f"  [SKIP] {worker_name} — no user ID for credential notice")
+            continue
+        msg = build_credential_message(worker_name, cred_issues)
+        if dry_run:
+            print(f"  [DRY RUN] Would send credential notice to {worker_name}")
+            cred_sent.append(worker_name)
+        else:
+            ok, result = send_worker_message(uid, msg, worker_name=worker_name)
+            if ok:
+                print(f"  ✓ Credential notice sent to {worker_name}")
+                cred_sent.append(worker_name)
+                for iss in cred_issues:
+                    fp = issue_fingerprint(iss)
+                    notified[fp] = {"date": now.strftime("%Y-%m-%d"), "worker": worker_name, "cred": True}
+            else:
+                print(f"  ✗ Credential notice failed for {worker_name}: {result}")
+
     # ── Manager summary → CC Management ─────────────────────────────────────
     summary_lines = [f"Audit done ({run_label})."]
 
@@ -289,6 +378,8 @@ def main():
             summary_lines.append(f"- {worker_name}: {reasons}")
     if sent_err:
         summary_lines.append(f"\nFailed to send to: {', '.join(sent_err)}")
+    if cred_sent:
+        summary_lines.append(f"\nCredential notices sent to: {', '.join(cred_sent)}")
 
     if team_new_issues:
         summary_lines.append(f"\nTeam issues (not sent to workers):")
@@ -313,8 +404,15 @@ def main():
     save_notified(notified)
     print(f"\nDedup cache updated: {len(notified)} fingerprints saved.")
 
+    # ── Lock time entries older than 3 days (prevents backdating) ────────────
+    _lock_prior_days(name_to_uid, now)
+
+    # ── Add permanent profile notes for CRITICAL breaches ────────────────────
+    if not dry_run:
+        _add_critical_profile_notes(issues, name_to_uid, now)
+
     print(f"\n{'='*60}")
-    print(f"Done — {len(sent_ok)} sent, {len(sent_err)} failed")
+    print(f"Done — {len(sent_ok)} shift + {len(cred_sent)} credential sent, {len(sent_err)} failed")
     print(f"{'='*60}\n")
 
 
