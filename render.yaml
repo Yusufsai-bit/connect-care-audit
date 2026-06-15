@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: amy-webhook
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn amy_webhook:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: CONNECTEAM_API_KEY
+        sync: false
+      - key: CONNECTEAM_SENDER_ID
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: GITHUB_TOKEN
+        sync: false
+      - key: GITHUB_REPO
+        value: Yusufsai-bit/connect-care-audit
