@@ -150,8 +150,20 @@ def _get_strike_count(worker_name: str, category: str, notified: dict) -> int:
     )
 
 
-def build_worker_message(worker_name: str, issues: list, strike_counts: dict = None) -> str:
-    """Generate a manager-tone compliance message via Claude Haiku."""
+def _format_history(history: list, first: str) -> str:
+    """Format conversation turns as a readable block for Claude prompts."""
+    if not history:
+        return ""
+    lines = []
+    for turn in history[-6:]:
+        label = "Amy" if turn.get("role") == "amy" else first
+        lines.append(f"{label}: {turn.get('text', '')}")
+    return "\n".join(lines)
+
+
+def build_worker_message(worker_name: str, issues: list, strike_counts: dict = None,
+                         history: list = None) -> str:
+    """Generate a compliance message via Claude Haiku, informed by conversation history."""
     from connecteam_audit import ANTHROPIC_API_KEY
     first = worker_name.split()[0]
     strike_counts = strike_counts or {}
@@ -180,28 +192,33 @@ def build_worker_message(worker_name: str, issues: list, strike_counts: dict = N
     else:
         tone_instruction = "Friendly and casual — first time flagging these issues."
 
+    history_block = _format_history(history, first)
+    history_section = f"\nRecent conversation with {first}:\n{history_block}\n" if history_block else ""
+    opener_rule = (
+        f"- Do NOT open with 'Hi {first},' — there's an ongoing conversation above, pick up the thread naturally."
+        if history_block else f"- Start with 'Hi {first},'"
+    )
+
     if ANTHROPIC_API_KEY:
         try:
             import anthropic
             client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-            prompt = f"""Write a short text message from Amy (a coordinator) to a support worker named {first} about issues from their shifts.
-
-Issues:
+            prompt = f"""You are Amy, a coordinator at Connect Care. Write a short text to {first} about issues from their shifts.
+{history_section}
+Issues to raise:
 {issues_block}
 
 Tone guidance: {tone_instruction}
 
 Rules:
-- Start with "Hi {first},"
+{opener_rule}
 - Write like you're texting a colleague — short, straight to the point
-- Say what happened and what they need to do, nothing else
+- Don't repeat anything already covered in the conversation above
 - Use the client's name naturally (e.g. "at Kallan's", "at Joshua's place")
 - Use the actual day (e.g. "on Sunday", "yesterday")
 - Zero corporate language — no "identified", "compliance", "noted", "I am writing", "please be advised", "regarding"
-- No greeting phrases like "I hope this finds you well"
 - No sign-off
-- If the issue is missing notes or missing forms, remind them that notes and forms must be submitted within 30 minutes of the shift ending — keep it casual, not a lecture
-- Example: "Hi Roja, for your shift on Sunday at Kallan's you clocked in 4.8km away from the house — can you make sure you're at the address before you clock in next time. Also the shift notes weren't submitted — just a reminder these need to be done within 30 mins of finishing up."
+- If the issue is missing notes or forms, remind them these need to be done within 30 minutes of the shift ending — casual, not a lecture
 - Output just the message, nothing else"""
 
             resp = client.messages.create(
@@ -214,13 +231,13 @@ Rules:
             print(f"  [WARNING] Claude message generation failed: {e}")
 
     # Plain-text fallback
-    lines = [f"Hi {first},"]
+    fallback = [f"Hi {first},"]
     for iss in issues[:10]:
-        lines.append(f"for your shift on {iss.date or 'recent shift'} at {iss.client or 'your client'}: {iss.detail}")
+        fallback.append(f"for your shift on {iss.date or 'recent shift'} at {iss.client or 'your client'}: {iss.detail}")
     if len(issues) > 10:
-        lines.append(f"there are also {len(issues) - 10} other issues on file.")
-    lines.append("Can you sort these out and let me know.")
-    return " ".join(lines)
+        fallback.append(f"there are also {len(issues) - 10} other issues on file.")
+    fallback.append("Can you sort these out and let me know.")
+    return " ".join(fallback)
 
 
 def build_team_summary(issues: list, run_label: str) -> str:
@@ -261,29 +278,66 @@ def post_to_management(text: str):
 
 # ── Credential message ────────────────────────────────────────────────────────
 
-def build_credential_message(worker_name: str, cred_issues: list) -> str:
-    first = worker_name.split()[0]
+def build_credential_message(worker_name: str, cred_issues: list,
+                              history: list = None) -> str:
+    from connecteam_audit import ANTHROPIC_API_KEY
+    first    = worker_name.split()[0]
     expired  = [i for i in cred_issues if i.category == "EXPIRED CREDENTIAL"]
     expiring = [i for i in cred_issues if i.category != "EXPIRED CREDENTIAL"]
 
+    history_block   = _format_history(history, first)
+    history_section = f"\nRecent conversation with {first}:\n{history_block}\n" if history_block else ""
+    opener_rule     = (
+        f"Do NOT open with 'Hi {first},' — there's an ongoing conversation above, pick up naturally."
+        if history_block else f"Start with 'Hi {first},'"
+    )
+
+    cred_lines = []
+    for iss in expired:
+        cred_lines.append(f"EXPIRED: {iss.detail}")
+    for iss in expiring:
+        cred_lines.append(f"EXPIRING SOON: {iss.detail}")
+    cred_block = "\n".join(cred_lines)
+
+    if ANTHROPIC_API_KEY:
+        try:
+            import anthropic
+            client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+            prompt = f"""You are Amy, a coordinator at Connect Care. Write a short text to {first} about their credentials.
+{history_section}
+Credential issues:
+{cred_block}
+
+Rules:
+- {opener_rule}
+- Write like a real person texting — casual, direct
+- If expired: make clear they can't work until it's sorted, ask them to send through updated docs
+- If expiring soon: give them a heads up and ask them to sort it before it lapses
+- End with: ask them to reply with a photo or PDF of the renewed certificate
+- Don't repeat anything already in the conversation above
+- No sign-off, no corporate language
+- Output just the message, nothing else"""
+            resp = client.messages.create(
+                model="claude-haiku-4-5",
+                max_tokens=300,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            return resp.content[0].text.strip()
+        except Exception as e:
+            print(f"  [WARNING] Claude credential message failed: {e}")
+
+    # Plain-text fallback
     lines = [f"Hi {first},"]
     if expired:
-        lines.append(f"\nThese credentials have expired and need to be renewed immediately:")
+        lines.append("these credentials have expired and need renewing immediately:")
         for iss in expired:
-            lines.append(f"• {iss.detail}")
-        lines.append(
-            "\nPlease send through the updated documents as soon as you have them — "
-            "you can't work shifts until these are current."
-        )
+            lines.append(f"  • {iss.detail}")
+        lines.append("You can't work shifts until these are current.")
     if expiring:
-        lines.append(f"\nThese are expiring soon — sort them before they lapse:")
+        lines.append("these are expiring soon — sort them before they lapse:")
         for iss in expiring:
-            lines.append(f"• {iss.detail}")
-
-    lines.append(
-        "\nOnce renewed, reply here with a photo or PDF of the new certificate "
-        "and I'll update your records."
-    )
+            lines.append(f"  • {iss.detail}")
+    lines.append("Once renewed, reply here with a photo or PDF and I'll update your records.")
     return "\n".join(lines)
 
 
@@ -521,24 +575,33 @@ def check_unacknowledged_escalations(now: datetime.datetime, notified: dict, dry
 # ── Declining note quality check-in ──────────────────────────────────────────
 
 def build_declining_notes_message(worker_first: str, total_issues: int,
-                                   recent_count: int, prior_count: int) -> str:
+                                   recent_count: int, prior_count: int,
+                                   history: list = None) -> str:
     ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+    history_block   = _format_history(history, worker_first)
+    history_section = f"\nRecent conversation with {worker_first}:\n{history_block}\n" if history_block else ""
+    opener_rule     = (
+        f"Do NOT open with 'Hi {worker_first},' — there's an ongoing conversation above, pick up naturally."
+        if history_block else f"Start with 'Hi {worker_first},'"
+    )
     if ANTHROPIC_API_KEY:
         try:
             import anthropic
             client_ai = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
             prompt = (
-                f"Write a short, gentle text message from Amy (a coordinator) to a support worker named {worker_first}.\n\n"
+                f"Write a short, gentle text message from Amy (a coordinator) to a support worker named {worker_first}.\n"
+                f"{history_section}\n"
                 f"Context:\n"
                 f"- The worker has had {total_issues} note-related issues flagged in the last 2 weeks\n"
                 f"- In the most recent week: {recent_count} note issues\n"
                 f"- In the week before that: {prior_count} note issues\n"
                 f"- The pattern is getting worse, not better\n\n"
                 f"Rules:\n"
-                f"- Start with \"Hi {worker_first},\"\n"
+                f"- {opener_rule}\n"
                 f"- 2-3 sentences max\n"
                 f"- Acknowledge the pattern without being accusatory — be warm and curious, not managerial\n"
                 f"- Ask if anything is making notes harder to complete\n"
+                f"- Don't repeat anything already covered in the conversation above\n"
                 f"- Zero corporate language — no \"it has come to my attention\", \"I am writing to\", \"compliance\"\n"
                 f"- No sign-off\n"
                 f"- Output just the message, nothing else"
@@ -560,7 +623,8 @@ def build_declining_notes_message(worker_first: str, total_issues: int,
 
 
 def run_declining_notes(now: datetime.datetime, notified: dict,
-                         name_to_uid: dict, dry_run: bool) -> list:
+                         name_to_uid: dict, dry_run: bool,
+                         convo_log: dict = None) -> list:
     """
     Find workers with a rising trend of note-quality issues and send a gentle check-in.
     Uses the already-loaded notified dict for both trend analysis and dedup.
@@ -644,8 +708,11 @@ def run_declining_notes(now: datetime.datetime, notified: dict,
         user         = uid_to_user.get(str(uid), {})
         worker_first = user.get("firstName", worker_name.split()[0]) or worker_name.split()[0]
 
-        print(f"  Generating check-in for {worker_name} (total={total}, recent={recent}, prior={prior})...")
-        message = build_declining_notes_message(worker_first, total, recent, prior)
+        worker_history = (convo_log or {}).get(str(uid), [])
+        if isinstance(worker_history, dict):
+            worker_history = worker_history.get("messages", [])
+        print(f"  Generating check-in for {worker_name} (total={total}, recent={recent}, prior={prior}, history={len(worker_history)} turns)...")
+        message = build_declining_notes_message(worker_first, total, recent, prior, history=worker_history)
 
         if dry_run:
             print(f"  [DRY RUN] Would send to {worker_name}: {message[:120]}")
@@ -761,8 +828,11 @@ def main():
 
         strike_counts = {iss.category: _get_strike_count(worker_name, iss.category, notified) for iss in worker_issues}
         max_strike    = max(strike_counts.values()) if strike_counts else 0
-        print(f"  Generating message for {worker_name} ({len(worker_issues)} issues, max strikes={max_strike})...")
-        message = build_worker_message(worker_name, worker_issues, strike_counts)
+        history       = convo_log.get(str(uid), [])
+        if isinstance(history, dict):
+            history = history.get("messages", [])
+        print(f"  Generating message for {worker_name} ({len(worker_issues)} issues, max strikes={max_strike}, history={len(history)} turns)...")
+        message = build_worker_message(worker_name, worker_issues, strike_counts, history=history)
 
         if dry_run:
             print(f"  [DRY RUN] Would send to {worker_name}:\n{message[:200]}...\n")
@@ -856,7 +926,10 @@ def main():
         if not uid:
             print(f"  [SKIP] {worker_name} — no user ID for credential notice")
             continue
-        msg = build_credential_message(worker_name, cred_issues)
+        cred_history = convo_log.get(str(uid), [])
+        if isinstance(cred_history, dict):
+            cred_history = cred_history.get("messages", [])
+        msg = build_credential_message(worker_name, cred_issues, history=cred_history)
         if dry_run:
             print(f"  [DRY RUN] Would send credential notice to {worker_name}")
             cred_sent.append(worker_name)
@@ -941,7 +1014,7 @@ def main():
         print(f"  [WARN] Invoice reconciliation skipped: {e}")
 
     # ── Declining note quality check-in ──────────────────────────────────────
-    declining_messaged = run_declining_notes(now, notified, name_to_uid, dry_run)
+    declining_messaged = run_declining_notes(now, notified, name_to_uid, dry_run, convo_log=convo_log)
     if declining_messaged:
         post_to_management(
             f"Note quality check-ins sent to: {', '.join(declining_messaged)}"
