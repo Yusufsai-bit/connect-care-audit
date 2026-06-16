@@ -507,8 +507,8 @@ def main():
     dedup = load_shift_prep_dedup()
     print(f"Loaded {len(dedup)} existing dedup entries.\n")
 
-    # THING 1 — shift prep
-    prep_messaged = run_shift_prep(now, dry_run, dedup)
+    # THING 1 — shift prep (paused)
+    prep_messaged = []
 
     # THING 2 — declining note quality
     declining_messaged = run_declining_notes(now, dry_run, dedup)
