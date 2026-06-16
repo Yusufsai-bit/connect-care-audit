@@ -4,12 +4,23 @@ services:
     env: python
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn amy_webhook:app --host 0.0.0.0 --port $PORT
+    # Only redeploy when server code or dependencies actually change.
+    # State file commits and workflow-only changes will NOT trigger a restart.
+    paths:
+      - amy_webhook.py
+      - connecteam_audit.py
+      - requirements.txt
+      - render.yaml
     envVars:
       - key: CONNECTEAM_API_KEY
         sync: false
       - key: CONNECTEAM_SENDER_ID
         sync: false
       - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: CC_MGMT_CONV_ID
+        sync: false
+      - key: WEBHOOK_SECRET
         sync: false
       - key: GITHUB_TOKEN
         sync: false
