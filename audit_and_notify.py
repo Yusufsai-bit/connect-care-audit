@@ -753,6 +753,12 @@ def main():
     print(f"Auditing last {DAYS_BACK} day(s) | dry_run={dry_run}")
     print(f"{'='*60}\n")
 
+    # Safety guard — never send worker messages outside 6 AM – 7 PM AEST
+    hour = now.hour
+    if hour >= 19 or hour < 6:
+        print(f"[QUIET HOURS] It is {now.strftime('%I:%M %p AEST')} — no worker messages sent outside 6 AM–7 PM. Exiting.")
+        return
+
     notified = load_notified()
     print(f"Loaded {len(notified)} existing fingerprints from dedup cache.\n")
 
