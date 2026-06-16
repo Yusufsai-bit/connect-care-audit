@@ -77,7 +77,8 @@ QUIET_END   = 6    # 6 AM AEST — no worker messages before this hour
 _SAFETY_KEYWORDS = {
     "fall", "fallen", "injury", "injured", "unconscious", "ambulance", "hospital",
     "emergency", "police", "assault", "attack", "missing", "not breathing",
-    "overdose", "seizure", "fire", "danger", "unsafe", "urgent", "incident",
+    "overdose", "seizure", "fire", "smoke", "danger", "unsafe", "urgent", "incident",
+    "choking", "cpr", "not responding", "not waking", "called 000", "call 000",
 }
 
 # ── Config ─────────────────────────────────────────────────────────────────────
@@ -1680,11 +1681,28 @@ def handle_chat_reply(data):
     elif not is_complex or verification:
         mark_acknowledged(user_id)
 
-    if amy_reply and SENDER_ID and CONNECTEAM_API_KEY:
-        safety_critical = _is_safety_critical(text)
-        _worker_send(user_id, amy_reply, force=safety_critical)
-        if safety_critical:
-            logger.info("[SAFETY OVERRIDE] quiet hours bypassed — safety-critical message detected")
+    safety_critical = _is_safety_critical(text)
+
+    if safety_critical and SENDER_ID and CONNECTEAM_API_KEY:
+        first = worker.split()[0]
+        emergency_reply = (
+            f"Call 000 immediately if anyone is in danger. "
+            f"I'm alerting the team right now — you're not alone in this."
+        )
+        _worker_send(user_id, emergency_reply, force=True)
+        append_to_conversation(user_id, "amy", emergency_reply)
+        urgent_mgmt = (
+            f"🚨 URGENT — {worker} just reported an incident:\n\"{text}\"\n"
+            f"Amy has told them to call 000 and that the team is aware. "
+            f"Please follow up with {worker} immediately."
+        )
+        alert_cc_management(urgent_mgmt)
+        if MANAGER_NUMBER:
+            send_msg_sms(MANAGER_NUMBER,
+                f"URGENT Connect Care: {worker} reported — \"{text[:160]}\". Check Connecteam now.")
+        logger.warning(f"[SAFETY CRITICAL] {worker}: '{text[:100]}' — manager alerted via SMS + CC Management")
+    elif amy_reply and SENDER_ID and CONNECTEAM_API_KEY:
+        _worker_send(user_id, amy_reply, force=False)
         append_to_conversation(user_id, "amy", amy_reply)
         logger.info(f"Amy replied ({'holding' if is_complex else 'closed'}): '{amy_reply[:80]}'")
 
