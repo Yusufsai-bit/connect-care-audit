@@ -255,13 +255,95 @@ def post_to_management(text: str):
 
 def build_credential_message(worker_name: str, cred_issues: list) -> str:
     first = worker_name.split()[0]
-    SEV_ICON = {"CRITICAL": "🔴", "HIGH": "🟠", "MEDIUM": "🟡"}
-    lines = [f"Hi {first},", "", "Your NDIS worker credentials need attention:", ""]
-    for iss in cred_issues:
-        icon = SEV_ICON.get(iss.severity, "🟡")
-        lines.append(f"{icon} {iss.detail}")
-    lines += ["", "Please action these as soon as possible and let me know once renewed.", "", "Cheers"]
+    expired  = [i for i in cred_issues if i.category == "EXPIRED CREDENTIAL"]
+    expiring = [i for i in cred_issues if i.category != "EXPIRED CREDENTIAL"]
+
+    lines = [f"Hi {first},"]
+    if expired:
+        lines.append(f"\nThese credentials have expired and need to be renewed immediately:")
+        for iss in expired:
+            lines.append(f"• {iss.detail}")
+        lines.append(
+            "\nPlease send through the updated documents as soon as you have them — "
+            "you can't work shifts until these are current."
+        )
+    if expiring:
+        lines.append(f"\nThese are expiring soon — sort them before they lapse:")
+        for iss in expiring:
+            lines.append(f"• {iss.detail}")
+
+    lines.append(
+        "\nOnce renewed, reply here with a photo or PDF of the new certificate "
+        "and I'll update your records."
+    )
     return "\n".join(lines)
+
+
+def _check_credential_followups(now: datetime.datetime, notified: dict, name_to_uid: dict,
+                                 conv_map: dict, dry_run: bool):
+    """Send a 3-day follow-up to workers who haven't provided updated credentials."""
+    threshold = int((now - datetime.timedelta(days=3)).timestamp())
+    sender_id = int(CONNECTEAM_SENDER_ID or "0")
+
+    for fp, v in notified.items():
+        if not isinstance(v, dict):
+            continue
+        if v.get("cred_followup_sent") or v.get("acknowledged"):
+            continue
+        if v.get("cred") != True:
+            continue
+        sent_ts = v.get("sent_ts")
+        if not sent_ts or sent_ts > threshold:
+            continue
+
+        wname = v.get("worker", "")
+        first = wname.split()[0] if wname else "there"
+        uid   = name_to_uid.get(wname)
+        if not uid:
+            continue
+
+        msg = (
+            f"Hey {first}, just following up — still waiting on your updated credential documents. "
+            f"Can you send them through today? Can't approve shifts until they're on file."
+        )
+        if dry_run:
+            print(f"  [DRY RUN] Credential follow-up to {wname}")
+            v["cred_followup_sent"] = True
+            continue
+
+        if not sender_id or not CONNECTEAM_API_KEY:
+            continue
+
+        conv_id = conv_map.get(str(uid))
+        sent = False
+        if conv_id:
+            try:
+                r = requests.post(
+                    f"{BASE_URL}/chat/v1/conversations/{conv_id}/message",
+                    headers={"X-API-KEY": CONNECTEAM_API_KEY, "Content-Type": "application/json"},
+                    json={"senderId": sender_id, "text": msg},
+                    timeout=15,
+                )
+                sent = r.ok
+            except Exception:
+                pass
+        if not sent:
+            try:
+                r = requests.post(
+                    f"{BASE_URL}/chat/v1/conversations/privateMessage/{uid}",
+                    headers={"X-API-KEY": CONNECTEAM_API_KEY, "Content-Type": "application/json"},
+                    json={"senderId": sender_id, "text": msg},
+                    timeout=15,
+                )
+                sent = r.ok
+            except Exception:
+                pass
+
+        if sent:
+            print(f"  ✓ Credential follow-up sent to {wname}")
+            v["cred_followup_sent"] = True
+        else:
+            print(f"  ✗ Credential follow-up failed for {wname}")
 
 
 # ── Time entry locking ────────────────────────────────────────────────────────
@@ -572,6 +654,42 @@ def main():
 
     save_convo_log(convo_log)
 
+    # ── Unscheduled shift handling ────────────────────────────────────────────
+    unscheduled_issues = [
+        iss for iss in issues
+        if iss.category == "UNSCHEDULED SHIFT" and iss.worker.lower() not in TEAM_NAMES
+    ]
+    for iss in unscheduled_issues:
+        uid = name_to_uid.get(iss.worker)
+        if not uid:
+            continue
+        fp = issue_fingerprint(iss)
+        if fp in notified:
+            continue  # already handled this shift
+        first = iss.worker.split()[0]
+        worker_msg = (
+            f"Hey {first}, I noticed you clocked in at {iss.client} on {iss.date} "
+            f"but that shift wasn't on your roster. Can you let me know what happened? "
+            f"(e.g. did the client or family ask you to come?)"
+        )
+        mgmt_msg = (
+            f"📋 Unscheduled shift — {iss.worker} clocked in at {iss.client} on {iss.date} "
+            f"with no roster entry. Amy has asked them for an explanation. "
+            f"Once they reply, approve or reject the hours."
+        )
+        if not dry_run:
+            ok, _ = send_worker_message(uid, worker_msg, worker_name=iss.worker)
+            if ok:
+                post_to_management(mgmt_msg)
+                notified[fp] = {
+                    "date": now.strftime("%Y-%m-%d"), "worker": iss.worker,
+                    "sent_ts": int(now.timestamp()), "acknowledged": False,
+                    "category": iss.category, "client": iss.client or "",
+                }
+                print(f"  ✓ Unscheduled shift: asked {iss.worker}, alerted CC Management")
+        else:
+            print(f"  [DRY RUN] Unscheduled shift: would ask {iss.worker} about {iss.client} on {iss.date}")
+
     # ── Credential expiry notifications ───────────────────────────────────────
     cred_sent = []
     for worker_name, cred_issues in sorted(cred_new_issues.items()):
@@ -637,6 +755,9 @@ def main():
     # ── Save dedup state ──────────────────────────────────────────────────────
     save_notified(notified)
     print(f"\nDedup cache updated: {len(notified)} fingerprints saved.")
+
+    # ── Credential 3-day follow-up ────────────────────────────────────────────
+    _check_credential_followups(now, notified, name_to_uid, conv_map, dry_run)
 
     # ── Lock time entries older than 3 days (prevents backdating) ────────────
     _lock_prior_days(name_to_uid, now)
