@@ -89,6 +89,8 @@ ANTHROPIC_API_KEY    = os.environ.get("ANTHROPIC_API_KEY", "")
 GITHUB_TOKEN         = os.environ.get("GITHUB_TOKEN", "")
 GITHUB_REPO          = os.environ.get("GITHUB_REPO", "Yusufsai-bit/connect-care-audit")
 WEBHOOK_SECRET       = os.environ.get("WEBHOOK_SECRET", "")
+if not WEBHOOK_SECRET:
+    raise RuntimeError("WEBHOOK_SECRET environment variable is not set — cannot verify Connecteam webhook signatures")
 MANAGER_NUMBER       = os.environ.get("MANAGER_NUMBER", "+61431836771")
 NOTIFICATIONS_FILE   = os.environ.get("NOTIFICATIONS_FILE", "notifications_log.json")
 
