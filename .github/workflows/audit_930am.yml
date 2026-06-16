@@ -37,6 +37,8 @@ jobs:
           ANTHROPIC_API_KEY:    ${{ secrets.ANTHROPIC_API_KEY }}
           CC_MGMT_CONV_ID:      ${{ secrets.CC_MGMT_CONV_ID }}
           AUDIT_DAYS_BACK:      "2"
+          GITHUB_TOKEN:         ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPO:          ${{ github.repository }}
         run: python audit_and_notify.py
 
       - name: Commit dedup state
