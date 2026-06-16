@@ -1,13 +1,48 @@
 """
-Amy Smart Reply — Webhook Server
-Receives Connecteam "Chat message created" events, reads conversation context,
-and generates a reply via Claude Haiku.
+Amy Unified Webhook Server — Connect Care NDIS Compliance Bot
+=============================================================
+Single FastAPI server that replaces both amy_webhook.py (Render) and
+connecteam_webhook.py (Railway). Deploy only on Render.
 
-Deploy on Render: uvicorn amy_webhook:app --host 0.0.0.0 --port $PORT
+Webhook URL: https://<render-domain>/webhook/connecteam
+
+Handles:
+  - All real-time Connecteam events (clock in/out, auto clock-out, admin edits,
+    form submissions, shift changes, user changes)
+  - Amy's worker chat replies (SIMPLE/COMPLEX classification, claim verification,
+    relay queue for manager-guided responses)
+  - Manager queries in CC Management (live Connecteam data lookups via build_context)
+  - Shift-end compliance scheduler (timer per shift, midnight refresh)
+  - 5 PM deadline alerts to CC Management
+  - Worker profile persistence (GitHub)
+
+Deploy: uvicorn amy_webhook:app --host 0.0.0.0 --port $PORT
+
+Environment variables required:
+  CONNECTEAM_API_KEY    — Connecteam REST API key
+  CONNECTEAM_SENDER_ID  — Amy's sender user ID in Connecteam
+  ANTHROPIC_API_KEY     — Claude API key
+  GITHUB_TOKEN          — GitHub personal access token for persistence
+  GITHUB_REPO           — e.g. Yusufsai-bit/connect-care-audit
+  CC_MGMT_CONV_ID       — Connecteam conversation ID for CC Management group
+  WEBHOOK_SECRET        — Shared HMAC secret (optional but recommended)
+  MANAGER_NUMBER        — Manager mobile for fallback SMS
 """
 
-import os, json, time, base64, logging, re, datetime, requests
-from fastapi import FastAPI, Request, HTTPException
+import os
+import json
+import hmac
+import hashlib
+import math
+import time
+import base64
+import logging
+import re
+import threading
+import datetime
+import requests
+
+from fastapi import FastAPI, Request, HTTPException, BackgroundTasks
 from fastapi.responses import JSONResponse
 
 try:
@@ -18,96 +53,340 @@ except ImportError:
         def utcoffset(self, dt): return datetime.timedelta(hours=10)
         def tzname(self, dt): return "AEST"
         def dst(self, dt): return datetime.timedelta(0)
+        def fromutc(self, dt): return dt + datetime.timedelta(hours=10)
     AEST = _AEST()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# ── Constants ──────────────────────────────────────────────────────────────────
+
+TIME_CLOCK_ID    = 1776332
+SCHEDULER_ID     = 1775479
+NOTES_FIELD      = "65cbb88e-6c3a-41b1-8822-975caed50def"
+GPS_THRESHOLD_KM = 0.5    # allowed radius from client address
+SHORT_SHIFT_MIN  = 15     # shifts under this are suspicious
+
+CLIENT_GPS_OVERRIDES = {
+    "john": (-37.67282, 144.99437, 0.2),
+}
+
+QUIET_START = 19   # 7 PM AEST — no worker messages after this hour
+QUIET_END   = 6    # 6 AM AEST — no worker messages before this hour
+
+_SAFETY_KEYWORDS = {
+    "fall", "fallen", "injury", "injured", "unconscious", "ambulance", "hospital",
+    "emergency", "police", "assault", "attack", "missing", "not breathing",
+    "overdose", "seizure", "fire", "danger", "unsafe", "urgent", "incident",
+}
+
 # ── Config ─────────────────────────────────────────────────────────────────────
+
 CONNECTEAM_API_KEY   = os.environ.get("CONNECTEAM_API_KEY", "")
 CONNECTEAM_SENDER_ID = os.environ.get("CONNECTEAM_SENDER_ID", "")
 ANTHROPIC_API_KEY    = os.environ.get("ANTHROPIC_API_KEY", "")
 GITHUB_TOKEN         = os.environ.get("GITHUB_TOKEN", "")
 GITHUB_REPO          = os.environ.get("GITHUB_REPO", "Yusufsai-bit/connect-care-audit")
-CC_MGMT_CONV_ID      = os.environ.get("CC_MGMT_CONV_ID", "")
+WEBHOOK_SECRET       = os.environ.get("WEBHOOK_SECRET", "")
+MANAGER_NUMBER       = os.environ.get("MANAGER_NUMBER", "+61431836771")
+NOTIFICATIONS_FILE   = os.environ.get("NOTIFICATIONS_FILE", "notifications_log.json")
+
+CC_MGMT_CONV_ID = os.environ.get("CC_MGMT_CONV_ID", "")
 if not CC_MGMT_CONV_ID:
     raise RuntimeError("CC_MGMT_CONV_ID environment variable is not set")
-BASE_URL             = "https://api.connecteam.com"
 
-STAFF_IDS        = {"2149475", "9736871", "2201497"}  # Yusuf, Nada, Faduma
-CONVO_LOG_FILE   = "amy_conversation_log.json"
+if not WEBHOOK_SECRET:
+    logger.warning("WEBHOOK_SECRET is not set — HMAC signature verification will be skipped")
+
+BASE_URL = "https://api.connecteam.com"
+
+STAFF_IDS    = {"2149475", "9736871", "2201497"}   # Yusuf, Nada, Faduma
+OBSERVER_IDS = {2149475, 9736871, 2201497}          # int version for comparison
+
+SENDER_ID = int(CONNECTEAM_SENDER_ID or "0")
+AMY_SENDER_IDS = {SENDER_ID} if SENDER_ID else set()
+ALL_SYSTEM_IDS = OBSERVER_IDS | AMY_SENDER_IDS
+
+CONVO_LOG_FILE    = "amy_conversation_log.json"
+PROFILES_FILE     = "worker_profiles.json"
 CONVO_EXPIRY_DAYS = 7
+
+# ── Module-level state ─────────────────────────────────────────────────────────
 
 conversation_log  = {}
 _time_clock_id    = None
-_scheduler_id     = None
+_scheduler_id_dyn = None   # dynamically discovered; SCHEDULER_ID constant is preferred
 _users_cache      = []
 _users_cache_ts   = 0.0
+_USER_CACHE: dict = {}     # user_id → user record (from connecteam_webhook pattern)
+_profiles_cache: dict = {}
+_profiles_loaded  = False
+
+PENDING_RELAY_QUEUE: list = []
+
+_SEEN_IDS: dict = {}
+_SEEN_LOCK = threading.Lock()
+
+_SCHEDULED_SHIFTS: set = set()
+_SCHEDULED_LOCK = threading.Lock()
+
+_EVENT_LOG: list = []
+_EVENT_LOG_LOCK = threading.Lock()
 
 app = FastAPI()
 
+# ── GitHub / disk persistence helpers ─────────────────────────────────────────
 
-# ── GitHub persistence ─────────────────────────────────────────────────────────
+def _gh_load(filename, default):
+    """Load a JSON file from GitHub, falling back to local disk, then default."""
+    if GITHUB_TOKEN:
+        try:
+            r = requests.get(
+                f"https://api.github.com/repos/{GITHUB_REPO}/contents/{filename}",
+                headers={"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github.v3+json"},
+                timeout=15,
+            )
+            if r.ok:
+                return json.loads(base64.b64decode(r.json()["content"]).decode())
+        except Exception as e:
+            logger.warning(f"GitHub load failed for {filename}: {e}")
+    try:
+        local = os.path.join(os.path.dirname(__file__) or ".", filename)
+        with open(local, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return default
+
+
+def _gh_save(filename, data):
+    """Save JSON to local disk and GitHub."""
+    local = os.path.join(os.path.dirname(__file__) or ".", filename)
+    try:
+        with open(local, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        logger.warning(f"Local save failed for {filename}: {e}")
+    if GITHUB_TOKEN:
+        try:
+            headers = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github.v3+json"}
+            r = requests.get(
+                f"https://api.github.com/repos/{GITHUB_REPO}/contents/{filename}",
+                headers=headers, timeout=15,
+            )
+            sha     = r.json().get("sha", "") if r.ok else ""
+            content = base64.b64encode(json.dumps(data, indent=2).encode()).decode()
+            payload = {"message": f"chore: update {filename} [skip ci]", "content": content}
+            if sha:
+                payload["sha"] = sha
+            requests.put(
+                f"https://api.github.com/repos/{GITHUB_REPO}/contents/{filename}",
+                headers=headers, json=payload, timeout=15,
+            )
+        except Exception as e:
+            logger.warning(f"GitHub save failed for {filename}: {e}")
+
 
 def load_from_github() -> dict:
-    try:
-        r = requests.get(
-            f"https://raw.githubusercontent.com/{GITHUB_REPO}/main/{CONVO_LOG_FILE}",
-            timeout=10,
-        )
-        if r.ok:
-            data = r.json()
-            cutoff = time.time() - CONVO_EXPIRY_DAYS * 86400
-            return {
-                uid: v for uid, v in data.items()
-                if v.get("messages") and v["messages"][-1].get("ts", 0) >= cutoff
-            }
-    except Exception as e:
-        logger.warning(f"Could not load conversation log from GitHub: {e}")
-    return {}
+    """Load conversation log from GitHub, pruning entries older than CONVO_EXPIRY_DAYS."""
+    data = _gh_load(CONVO_LOG_FILE, {})
+    cutoff = time.time() - CONVO_EXPIRY_DAYS * 86400
+    return {
+        uid: v for uid, v in data.items()
+        if v.get("messages") and v["messages"][-1].get("ts", 0) >= cutoff
+    }
 
 
 def save_to_github(data: dict):
-    if not GITHUB_TOKEN:
-        logger.warning("GITHUB_TOKEN not set — skipping GitHub persist")
-        return
+    _gh_save(CONVO_LOG_FILE, data)
+
+
+# ── Pending relay queue persistence ───────────────────────────────────────────
+
+def load_pending_relay():
+    return _gh_load("pending_relay_queue.json", [])
+
+
+def save_pending_relay(queue):
+    _gh_save("pending_relay_queue.json", queue)
+
+
+# ── Shift notification dedup persistence ──────────────────────────────────────
+
+def load_shift_notified():
+    """Load persisted shift-notification keys; prune entries older than 24 h."""
+    data   = _gh_load("shift_notified.json", {})
+    cutoff = time.time() - 86400
+    return {k: v for k, v in data.items() if v >= cutoff}
+
+
+def save_shift_notified(mapping):
+    _gh_save("shift_notified.json", mapping)
+
+
+# ── Notification log persistence ──────────────────────────────────────────────
+
+def load_notifications():
+    return _gh_load(NOTIFICATIONS_FILE, [])
+
+
+def save_notifications(notifs):
     try:
-        r = requests.get(
-            f"https://api.github.com/repos/{GITHUB_REPO}/contents/{CONVO_LOG_FILE}",
-            headers={"Authorization": f"token {GITHUB_TOKEN}"},
-            timeout=10,
-        )
-        sha = r.json().get("sha", "") if r.ok else ""
-        encoded = base64.b64encode(json.dumps(data, indent=2).encode()).decode()
-        requests.put(
-            f"https://api.github.com/repos/{GITHUB_REPO}/contents/{CONVO_LOG_FILE}",
-            headers={"Authorization": f"token {GITHUB_TOKEN}", "Content-Type": "application/json"},
-            json={"message": "chore: update amy conversation log [skip ci]", "content": encoded, "sha": sha},
-            timeout=15,
-        )
-        logger.info("Conversation log saved to GitHub")
+        with open(NOTIFICATIONS_FILE, "w", encoding="utf-8") as f:
+            json.dump(notifs, f, default=str, indent=2)
     except Exception as e:
-        logger.error(f"Failed to save to GitHub: {e}")
+        logger.error(f"Could not save notifications locally: {e}")
+    if GITHUB_TOKEN:
+        try:
+            headers = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github.v3+json"}
+            r = requests.get(
+                f"https://api.github.com/repos/{GITHUB_REPO}/contents/{NOTIFICATIONS_FILE}",
+                headers=headers, timeout=15,
+            )
+            sha     = r.json().get("sha", "") if r.ok else ""
+            content = base64.b64encode(json.dumps(notifs, default=str, indent=2).encode()).decode()
+            payload = {"message": "chore: update notification status [skip ci]", "content": content}
+            if sha:
+                payload["sha"] = sha
+            requests.put(
+                f"https://api.github.com/repos/{GITHUB_REPO}/contents/{NOTIFICATIONS_FILE}",
+                headers=headers, json=payload, timeout=15,
+            )
+        except Exception as e:
+            logger.warning(f"GitHub notification sync failed: {e}")
 
 
-# ── Startup ────────────────────────────────────────────────────────────────────
+def mark_acknowledged(user_id):
+    """Mark all Sent notifications for this worker as Acknowledged."""
+    notifs  = load_notifications()
+    changed = False
+    for n in notifs:
+        if str(n.get("worker_id")) == str(user_id) and n.get("status") == "Sent":
+            n["status"]          = "Acknowledged"
+            n["acknowledged_at"] = datetime.datetime.now().strftime("%d %b %Y, %I:%M %p")
+            changed = True
+    if changed:
+        save_notifications(notifs)
+    return changed
 
-@app.on_event("startup")
-async def startup():
-    global conversation_log
-    conversation_log = load_from_github()
-    logger.info(f"Loaded {len(conversation_log)} worker conversation(s) from GitHub")
-    _discover_resource_ids()
+
+def mark_resolved(user_id):
+    """Mark all Sent/Acknowledged notifications for this worker as Resolved."""
+    notifs  = load_notifications()
+    changed = False
+    now_str = datetime.datetime.now().strftime("%d %b %Y, %I:%M %p")
+    for n in notifs:
+        if str(n.get("worker_id")) == str(user_id) and n.get("status") in ("Sent", "Acknowledged"):
+            n["status"]      = "Resolved"
+            n["resolved_at"] = now_str
+            if not n.get("acknowledged_at"):
+                n["acknowledged_at"] = now_str
+            changed = True
+    if changed:
+        save_notifications(notifs)
+    return changed
 
 
-# ── Connecteam helpers ─────────────────────────────────────────────────────────
+# ── Amy conversation memory ────────────────────────────────────────────────────
+
+def get_conversation_history(user_id, n=8):
+    """Return last n turns as list of {role, text, ts} dicts."""
+    memory = _gh_load("amy_conversation_log.json", {})
+    hist = memory.get(str(user_id), [])
+    if isinstance(hist, str):
+        hist = [{"role": "amy", "text": hist, "ts": ""}] if hist else []
+    return hist[-n:]
+
+
+def append_to_conversation(user_id, role, text):
+    """Append a turn to this worker's conversation history (cap at 20 entries)."""
+    memory = _gh_load("amy_conversation_log.json", {})
+    hist = memory.get(str(user_id), [])
+    if isinstance(hist, str):
+        hist = [{"role": "amy", "text": hist, "ts": ""}] if hist else []
+    hist.append({"role": role, "text": text[:500], "ts": datetime.datetime.now(AEST).strftime("%d %b %H:%M")})
+    memory[str(user_id)] = hist[-20:]
+    _gh_save("amy_conversation_log.json", memory)
+
+
+# ── Worker profiles ────────────────────────────────────────────────────────────
+
+def _load_profiles() -> dict:
+    global _profiles_cache, _profiles_loaded
+    if _profiles_loaded:
+        return _profiles_cache
+    _profiles_cache = _gh_load(PROFILES_FILE, {})
+    _profiles_loaded = True
+    return _profiles_cache
+
+
+def _save_profiles(profiles: dict):
+    global _profiles_cache
+    _profiles_cache = profiles
+    _gh_save(PROFILES_FILE, profiles)
+
+
+def get_worker_profile(worker_id: str, worker_name: str) -> dict:
+    profiles = _load_profiles()
+    return profiles.get(worker_id, {
+        "worker_name":       worker_name,
+        "last_issue_date":   None,
+        "last_issue_summary": None,
+        "open_issues":       [],
+        "reply_count":       0,
+        "no_reply_count":    0,
+        "credential_status": None,
+        "notes":             "",
+    })
+
+
+def update_worker_profile(worker_id: str, updates: dict):
+    profiles = _load_profiles()
+    existing = profiles.get(worker_id, {})
+    existing.update(updates)
+    profiles[worker_id] = existing
+    _save_profiles(profiles)
+
+
+def _build_profile_context(profile: dict) -> str:
+    """Build a short profile summary to inject into Amy's prompt."""
+    lines = []
+    if profile.get("last_issue_date"):
+        lines.append(f"Last compliance issue: {profile['last_issue_date']}")
+    if profile.get("last_issue_summary"):
+        lines.append(f"Issue summary: {profile['last_issue_summary']}")
+    if profile.get("open_issues"):
+        lines.append(f"Still unresolved: {', '.join(profile['open_issues'][:3])}")
+    if profile.get("credential_status"):
+        lines.append(f"Credential status: {profile['credential_status']}")
+    if profile.get("no_reply_count", 0) > 1:
+        lines.append(f"Note: has ignored {profile['no_reply_count']} previous compliance messages without replying.")
+    return "\n".join(lines) if lines else ""
+
+
+# ── Connecteam API helpers ─────────────────────────────────────────────────────
 
 def _h():
     return {"X-API-KEY": CONNECTEAM_API_KEY}
 
 
+def ct_get(path, params=None):
+    try:
+        r = requests.get(
+            f"{BASE_URL}{path}",
+            headers={"X-API-KEY": CONNECTEAM_API_KEY, "Accept": "application/json"},
+            params=params, timeout=15,
+        )
+        if not r.ok:
+            logger.warning(f"ct_get {path} returned {r.status_code}: {r.text[:200]}")
+            return {}
+        return r.json()
+    except Exception as e:
+        logger.warning(f"ct_get {path} failed: {e}")
+        return {}
+
+
 def _discover_resource_ids():
-    global _time_clock_id, _scheduler_id
+    global _time_clock_id, _scheduler_id_dyn
     if not CONNECTEAM_API_KEY:
         return
     try:
@@ -124,8 +403,8 @@ def _discover_resource_ids():
         if r.ok:
             schedulers = r.json().get("data", {}).get("schedulers", [])
             if schedulers:
-                _scheduler_id = schedulers[0].get("id")
-                logger.info(f"Scheduler ID: {_scheduler_id}")
+                _scheduler_id_dyn = schedulers[0].get("id")
+                logger.info(f"Scheduler ID (dynamic): {_scheduler_id_dyn}")
     except Exception as e:
         logger.warning(f"Scheduler discovery failed: {e}")
 
@@ -137,7 +416,7 @@ def _get_users() -> list:
     try:
         r = requests.get(f"{BASE_URL}/users/v1/users", headers=_h(), timeout=15)
         if r.ok:
-            _users_cache = r.json().get("data", {}).get("users", [])
+            _users_cache    = r.json().get("data", {}).get("users", [])
             _users_cache_ts = time.time()
     except Exception as e:
         logger.warning(f"Users fetch failed: {e}")
@@ -164,6 +443,114 @@ def _find_user(name: str, users: list):
             return u
     return None
 
+
+def _fetch_user(user_id):
+    """Fetch a single user record with in-memory cache. Falls back to list scan."""
+    uid = str(user_id)
+    if uid in _USER_CACHE:
+        return _USER_CACHE[uid]
+    data = ct_get(f"/users/v1/users/{uid}")
+    u = (data.get("data") or {}).get("user") or {}
+    if u.get("firstName") or u.get("displayName"):
+        _USER_CACHE[uid] = u
+        return u
+    # Individual endpoint returned empty — scan the list
+    list_data = ct_get("/users/v1/users", {"limit": 200})
+    users = (list_data.get("data") or {}).get("users") or []
+    for user in users:
+        _USER_CACHE[str(user.get("id") or user.get("userId", ""))] = user
+    u = _USER_CACHE.get(uid, {})
+    return u
+
+
+def get_worker_name(user_id) -> str:
+    """Fetch worker display name with cache. Falls back to list scan."""
+    u = _fetch_user(user_id)
+    return (
+        u.get("displayName")
+        or f"{u.get('firstName', '')} {u.get('lastName', '')}".strip()
+        or f"Worker {user_id}"
+    )
+
+
+def get_worker_phone(user_id) -> str:
+    u = _fetch_user(user_id)
+    return u.get("phoneNumber") or u.get("phone") or ""
+
+
+def _find_worker_id_by_name(name):
+    """Look up a worker's user_id by partial name match in Connecteam."""
+    name_lower = name.lower().strip()
+    data = ct_get("/users/v1/users", {"limit": 100})
+    users = (data.get("data") or {}).get("users") or []
+    for user in users:
+        full = (user.get("displayName") or "").lower()
+        if name_lower == full or full.startswith(name_lower):
+            return user.get("id")
+    for user in users:
+        full = (user.get("displayName") or "").lower()
+        if name_lower in full:
+            return user.get("id")
+    return None
+
+
+def get_job_name(job_id) -> str:
+    data = ct_get(f"/jobs/v1/jobs/{job_id}")
+    j    = (data.get("data") or {}).get("job") or data
+    return j.get("title") or j.get("name") or f"Client {job_id}"
+
+
+def get_job_full(job_id):
+    data = ct_get(f"/jobs/v1/jobs/{job_id}")
+    return (data.get("data") or {}).get("job") or data
+
+
+def haversine_km(lat1, lon1, lat2, lon2) -> float:
+    R = 6371.0
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = (math.sin(dlat / 2) ** 2
+         + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2))
+         * math.sin(dlon / 2) ** 2)
+    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+
+def get_note_text(attachments) -> str:
+    """Extract shift note text from shiftAttachments list."""
+    for att in (attachments or []):
+        if att.get("shiftAttachmentId") != NOTES_FIELD:
+            continue
+        for key in ("value", "text", "note", "content"):
+            val = att.get(key)
+            if val and isinstance(val, str) and val.strip():
+                return val.strip()
+        fields = att.get("fields") or att.get("values") or []
+        if isinstance(fields, list):
+            for f in fields:
+                val = f.get("value") or f.get("text") or ""
+                if val and isinstance(val, str) and val.strip():
+                    return val.strip()
+    return ""
+
+
+def fetch_latest_activity(user_id):
+    """Return the most recently clocked-out time entry for today."""
+    today = datetime.date.today().isoformat()
+    data  = ct_get(
+        f"/time-clock/v1/time-clocks/{TIME_CLOCK_ID}/time-activities",
+        {"startDate": today, "endDate": today},
+    )
+    raw = (data.get("data") or {}).get("timeActivitiesByUsers") or []
+    for entry in raw:
+        if str(entry.get("userId")) == str(user_id):
+            shifts    = entry.get("shifts") or []
+            completed = [s for s in shifts if (s.get("end") or {}).get("timestamp")]
+            if completed:
+                return max(completed, key=lambda s: s["end"]["timestamp"])
+    return None
+
+
+# ── Date / time helpers ────────────────────────────────────────────────────────
 
 def _parse_dt(s: str):
     if not s:
@@ -199,12 +586,24 @@ def _date_range(period: str):
         return mon.isoformat(), (mon + datetime.timedelta(days=6)).isoformat()
     if period == "this_weekend":
         days = (5 - today.weekday()) % 7 or 7
-        sat = today + datetime.timedelta(days=days)
+        sat  = today + datetime.timedelta(days=days)
         return sat.isoformat(), (sat + datetime.timedelta(days=1)).isoformat()
     return today.isoformat(), today.isoformat()
 
 
-# ── Data fetchers ──────────────────────────────────────────────────────────────
+# ── Quiet hours / safety ───────────────────────────────────────────────────────
+
+def _is_quiet_hours() -> bool:
+    hour = datetime.datetime.now(AEST).hour
+    return hour >= QUIET_START or hour < QUIET_END
+
+
+def _is_safety_critical(text: str) -> bool:
+    lowered = text.lower()
+    return any(kw in lowered for kw in _SAFETY_KEYWORDS)
+
+
+# ── Data fetchers (for build_context / manager queries) ───────────────────────
 
 def _fetch_time_activities(start: str, end: str, user_ids: list = None) -> list:
     if not _time_clock_id:
@@ -228,13 +627,12 @@ def _fetch_time_activities(start: str, end: str, user_ids: list = None) -> list:
 
 
 def _fetch_shifts(start: str, end: str) -> list:
-    if not _scheduler_id:
+    if not _time_clock_id:
         _discover_resource_ids()
-    if not _scheduler_id:
-        return []
+    sid = _scheduler_id_dyn or SCHEDULER_ID
     try:
         r = requests.get(
-            f"{BASE_URL}/scheduler/v2/schedulers/{_scheduler_id}/shifts",
+            f"{BASE_URL}/scheduler/v2/schedulers/{sid}/shifts",
             headers=_h(), params={"startDate": start, "endDate": end}, timeout=15,
         )
         if r.ok:
@@ -304,7 +702,7 @@ def _fetch_forms() -> list:
         if not r.ok:
             return []
         for form in r.json().get("data", {}).get("forms", [])[:5]:
-            fid = form.get("id")
+            fid  = form.get("id")
             subs = []
             if fid:
                 sr = requests.get(f"{BASE_URL}/forms/v1/forms/{fid}/form-submissions", headers=_h(), timeout=10)
@@ -330,8 +728,7 @@ def _fetch_pay_rates(user_id: str = None) -> list:
 
 
 def _fetch_unavailabilities(start: str, end: str) -> list:
-    if not _scheduler_id:
-        return []
+    sid = _scheduler_id_dyn or SCHEDULER_ID
     try:
         r = requests.get(
             f"{BASE_URL}/scheduler/v2/schedulers/user-unavailability",
@@ -344,7 +741,7 @@ def _fetch_unavailabilities(start: str, end: str) -> list:
     return []
 
 
-# ── Intent detection ───────────────────────────────────────────────────────────
+# ── Intent detection (for manager queries) ────────────────────────────────────
 
 _KW_CLOCK    = {"clock", "clocked", "late", "attendance", "checked in", "check in",
                 "who's in", "who is in", "not in", "on site", "arrived", "clocking",
@@ -396,11 +793,10 @@ def _detect_intent(text: str) -> dict:
     names = [w for w in words if w.lower() not in _STOP]
     if names:
         intent["person"] = " ".join(names)
-
     return intent
 
 
-# ── Context builder ────────────────────────────────────────────────────────────
+# ── Context builder (for manager queries) ─────────────────────────────────────
 
 def build_context(message_text: str) -> str:
     intent = _detect_intent(message_text)
@@ -408,7 +804,7 @@ def build_context(message_text: str) -> str:
     if not needs_data:
         return ""
 
-    users  = _get_users()
+    users      = _get_users()
     start, end = _date_range(intent["period"])
     now_aest   = datetime.datetime.now(AEST).strftime("%A, %d %B %Y %H:%M")
 
@@ -422,19 +818,15 @@ def build_context(message_text: str) -> str:
 
     parts = [f"Current time (AEST): {now_aest}. Data period: {start} to {end}."]
 
-    # ── Clock-in vs scheduled shift comparison ─────────────────────────────────
     if intent["time_clock"]:
         activities = _fetch_time_activities(start, end, target_uids)
         shifts     = _fetch_shifts(start, end)
-
-        act_map   = {}
+        act_map    = {}
         for a in activities:
             act_map.setdefault(_uid(a), []).append(a)
-
         shift_map = {}
         for s in shifts:
             shift_map.setdefault(_uid(s), []).append(s)
-
         all_uids = sorted(set(act_map) | set(shift_map))
         lines = [f"\n=== CLOCK-IN DATA ({start}) ==="]
         for uid in all_uids:
@@ -444,11 +836,10 @@ def build_context(message_text: str) -> str:
             acts = act_map.get(uid, [])
             shs  = shift_map.get(uid, [])
             sch_start = _parse_dt((shs[0].get("startTime") or shs[0].get("start") or "") if shs else "")
-
             if acts:
                 for a in acts:
-                    ci = _parse_dt(a.get("clockInTime") or a.get("startTime") or a.get("clockIn") or "")
-                    co = _parse_dt(a.get("clockOutTime") or a.get("endTime") or a.get("clockOut") or "")
+                    ci  = _parse_dt(a.get("clockInTime") or a.get("startTime") or a.get("clockIn") or "")
+                    co  = _parse_dt(a.get("clockOutTime") or a.get("endTime") or a.get("clockOut") or "")
                     row = [name]
                     if ci:
                         row.append(f"in {_fmt(ci)}")
@@ -468,23 +859,21 @@ def build_context(message_text: str) -> str:
             else:
                 sched = f"sched {_fmt(sch_start)}" if sch_start else "scheduled today"
                 lines.append(f"  {name} | NOT clocked in ({sched})")
-
         if len(lines) == 1:
             lines.append("  No clock-in records or scheduled shifts found.")
         parts.append("\n".join(lines))
 
-    # ── Roster / scheduled shifts ──────────────────────────────────────────────
     elif intent["scheduler"]:
         shifts = _fetch_shifts(start, end)
         lines  = [f"\n=== SCHEDULED SHIFTS ({start} to {end}) ==="]
         for s in shifts:
-            uid  = _uid(s)
-            name = _user_name(uid, users)
-            st   = _parse_dt(s.get("startTime") or s.get("start") or "")
-            et   = _parse_dt(s.get("endTime") or s.get("end") or "")
-            job  = s.get("jobName") or s.get("job") or ""
-            st_s = st.astimezone(AEST).strftime("%a %d %b %H:%M") if st else "?"
-            line = f"  {name}: {st_s} → {_fmt(et)}"
+            uid   = _uid(s)
+            name  = _user_name(uid, users)
+            st    = _parse_dt(s.get("startTime") or s.get("start") or "")
+            et    = _parse_dt(s.get("endTime") or s.get("end") or "")
+            job   = s.get("jobName") or s.get("job") or ""
+            st_s  = st.astimezone(AEST).strftime("%a %d %b %H:%M") if st else "?"
+            line  = f"  {name}: {st_s} → {_fmt(et)}"
             if job:
                 line += f" ({job})"
             lines.append(line)
@@ -492,10 +881,9 @@ def build_context(message_text: str) -> str:
             lines.append("  No shifts found for this period.")
         parts.append("\n".join(lines))
 
-    # ── Timesheet / hours worked ───────────────────────────────────────────────
     if intent["hours"]:
-        sheet = _fetch_timesheet(start, end, target_uids)
-        lines = [f"\n=== TIMESHEET ({start} to {end}) ==="]
+        sheet   = _fetch_timesheet(start, end, target_uids)
+        lines   = [f"\n=== TIMESHEET ({start} to {end}) ==="]
         entries = (sheet.get("timesheetEntries") or sheet.get("users") or
                    sheet.get("entries") or [])
         if entries:
@@ -514,7 +902,6 @@ def build_context(message_text: str) -> str:
             lines.append("  No timesheet data found.")
         parts.append("\n".join(lines))
 
-    # ── Time off requests ──────────────────────────────────────────────────────
     if intent["time_off"]:
         reqs  = _fetch_time_off()
         lines = ["\n=== TIME OFF REQUESTS ==="]
@@ -529,32 +916,29 @@ def build_context(message_text: str) -> str:
         if len(lines) == 1:
             lines.append("  No time off requests found.")
         parts.append("\n".join(lines))
-
-    # ── Unavailabilities ───────────────────────────────────────────────────────
         unavail = _fetch_unavailabilities(start, end)
         if unavail:
             lines2 = [f"\n=== UNAVAILABILITIES ({start} to {end}) ==="]
             for u in unavail[:15]:
-                uid   = _uid(u)
-                name  = _user_name(uid, users)
+                uid     = _uid(u)
+                name    = _user_name(uid, users)
                 start_d = u.get("startDate") or u.get("start") or ""
                 end_d   = u.get("endDate") or u.get("end") or ""
                 reason  = u.get("reason") or u.get("note") or ""
                 lines2.append(f"  {name}: {start_d}–{end_d}" + (f" ({reason})" if reason else ""))
             parts.append("\n".join(lines2))
 
-    # ── Tasks ──────────────────────────────────────────────────────────────────
     if intent["tasks"]:
         tasks = _fetch_tasks()
         lines = ["\n=== TASKS ==="]
         for task in tasks[:25]:
-            title  = task.get("title") or task.get("name") or "Untitled"
-            status = task.get("status") or task.get("statusName") or ""
-            board  = task.get("_board", "")
-            due    = task.get("dueDate") or task.get("due_date") or ""
-            a_id   = str(task.get("assigneeId") or task.get("assignedUserId") or "")
+            title    = task.get("title") or task.get("name") or "Untitled"
+            status   = task.get("status") or task.get("statusName") or ""
+            board    = task.get("_board", "")
+            due      = task.get("dueDate") or task.get("due_date") or ""
+            a_id     = str(task.get("assigneeId") or task.get("assignedUserId") or "")
             assignee = _user_name(a_id, users) if a_id else "Unassigned"
-            row = f"  [{status}] {title}"
+            row      = f"  [{status}] {title}"
             if board:
                 row += f" ({board})"
             row += f" — {assignee}"
@@ -565,7 +949,6 @@ def build_context(message_text: str) -> str:
             lines.append("  No tasks found.")
         parts.append("\n".join(lines))
 
-    # ── Forms & submissions ────────────────────────────────────────────────────
     if intent["forms"]:
         forms_data = _fetch_forms()
         lines = ["\n=== FORMS & SUBMISSIONS ==="]
@@ -580,28 +963,30 @@ def build_context(message_text: str) -> str:
             lines.append("  No form data found.")
         parts.append("\n".join(lines))
 
-    # ── Pay rates ──────────────────────────────────────────────────────────────
     if intent["pay"]:
         rates = _fetch_pay_rates(target_uid)
         lines = ["\n=== PAY RATES ==="]
         for rate in rates[:20]:
-            uid  = _uid(rate)
-            name = _user_name(uid, users)
-            amt  = rate.get("rate") or rate.get("amount") or rate.get("hourlyRate") or "?"
+            uid   = _uid(rate)
+            name  = _user_name(uid, users)
+            amt   = rate.get("rate") or rate.get("amount") or rate.get("hourlyRate") or "?"
             rtype = rate.get("type") or rate.get("rateType") or ""
             lines.append(f"  {name}: ${amt}/hr" + (f" ({rtype})" if rtype else ""))
         if len(lines) == 1:
             lines.append("  No pay rate data found.")
         parts.append("\n".join(lines))
 
-    # ── Team list ──────────────────────────────────────────────────────────────
     if intent["users"] and not any(intent[k] for k in ("time_clock", "scheduler", "time_off")):
         lines = ["\n=== TEAM MEMBERS ==="]
         for u in users:
             name   = f"{u.get('firstName', '')} {u.get('lastName', '')}".strip()
             role   = u.get("jobTitle") or u.get("role") or u.get("position") or ""
             status = u.get("status") or ""
-            lines.append(f"  {name}" + (f" — {role}" if role else "") + (f" [{status}]" if status and status != "active" else ""))
+            lines.append(
+                f"  {name}"
+                + (f" — {role}" if role else "")
+                + (f" [{status}]" if status and status != "active" else "")
+            )
         if len(lines) == 1:
             lines.append("  No users found.")
         parts.append("\n".join(lines))
@@ -609,137 +994,226 @@ def build_context(message_text: str) -> str:
     return "\n".join(parts)
 
 
-# ── Worker profiles (persistent memory across sessions) ───────────────────────
+# ── Messaging ──────────────────────────────────────────────────────────────────
 
-PROFILES_FILE = "worker_profiles.json"
-_profiles_cache: dict = {}
-_profiles_loaded = False
-
-
-def _load_profiles() -> dict:
-    global _profiles_cache, _profiles_loaded
-    if _profiles_loaded:
-        return _profiles_cache
+def send_message(conv_id: str, text: str) -> bool:
+    """Send a message to a Connecteam conversation."""
+    if not CONNECTEAM_API_KEY or not CONNECTEAM_SENDER_ID:
+        logger.warning("Connecteam credentials missing")
+        return False
     try:
-        r = requests.get(
-            f"https://raw.githubusercontent.com/{GITHUB_REPO}/main/{PROFILES_FILE}",
-            timeout=10,
+        r = requests.post(
+            f"{BASE_URL}/chat/v1/conversations/{conv_id}/message",
+            headers={**_h(), "Content-Type": "application/json"},
+            json={"senderId": int(CONNECTEAM_SENDER_ID), "text": text[:4000]},
+            timeout=15,
         )
-        _profiles_cache = r.json() if r.ok else {}
-    except Exception:
-        _profiles_cache = {}
-    _profiles_loaded = True
-    return _profiles_cache
-
-
-def _save_profiles(profiles: dict):
-    global _profiles_cache
-    _profiles_cache = profiles
-    if not GITHUB_TOKEN:
-        return
-    try:
-        import base64
-        headers = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github.v3+json"}
-        r = requests.get(
-            f"https://api.github.com/repos/{GITHUB_REPO}/contents/{PROFILES_FILE}",
-            headers=headers, timeout=10,
-        )
-        sha     = r.json().get("sha", "") if r.ok else ""
-        content = base64.b64encode(json.dumps(profiles, indent=2).encode()).decode()
-        payload = {"message": "chore: update worker profiles [skip ci]", "content": content}
-        if sha:
-            payload["sha"] = sha
-        requests.put(
-            f"https://api.github.com/repos/{GITHUB_REPO}/contents/{PROFILES_FILE}",
-            headers=headers, json=payload, timeout=15,
-        )
+        return r.ok
     except Exception as e:
-        logger.warning(f"Failed to save worker profiles: {e}")
+        logger.error(f"Send message failed: {e}")
+        return False
 
 
-def get_worker_profile(worker_id: str, worker_name: str) -> dict:
-    profiles = _load_profiles()
-    return profiles.get(worker_id, {
-        "worker_name": worker_name,
-        "last_issue_date": None,
-        "last_issue_summary": None,
-        "open_issues": [],
-        "reply_count": 0,
-        "no_reply_count": 0,
-        "credential_status": None,
-        "notes": "",
-    })
+def post_to_conversation(conv_id, text) -> bool:
+    """Post a message to a specific Connecteam group conversation."""
+    if not SENDER_ID or not CONNECTEAM_API_KEY:
+        return False
+    try:
+        r = requests.post(
+            f"{BASE_URL}/chat/v1/conversations/{conv_id}/message",
+            headers={"X-API-KEY": CONNECTEAM_API_KEY, "Content-Type": "application/json"},
+            json={"senderId": SENDER_ID, "text": text[:4000]},
+            timeout=15,
+        )
+        return r.ok
+    except Exception:
+        return False
 
 
-def update_worker_profile(worker_id: str, updates: dict):
-    profiles = _load_profiles()
-    existing = profiles.get(worker_id, {})
-    existing.update(updates)
-    profiles[worker_id] = existing
-    _save_profiles(profiles)
+def alert_cc_management(text) -> bool:
+    """Post an alert to the CC Management group."""
+    ok = post_to_conversation(CC_MGMT_CONV_ID, text)
+    if not ok:
+        logger.warning(f"Could not post alert to CC Management: {text[:80]}")
+    return ok
 
 
-def _build_profile_context(profile: dict) -> str:
-    """Build a short profile summary to inject into Amy's prompt."""
-    lines = []
-    if profile.get("last_issue_date"):
-        lines.append(f"Last compliance issue: {profile['last_issue_date']}")
-    if profile.get("last_issue_summary"):
-        lines.append(f"Issue summary: {profile['last_issue_summary']}")
-    if profile.get("open_issues"):
-        lines.append(f"Still unresolved: {', '.join(profile['open_issues'][:3])}")
-    if profile.get("credential_status"):
-        lines.append(f"Credential status: {profile['credential_status']}")
-    if profile.get("no_reply_count", 0) > 1:
-        lines.append(f"Note: has ignored {profile['no_reply_count']} previous compliance messages without replying.")
-    return "\n".join(lines) if lines else ""
+def load_worker_conversations() -> dict:
+    """Load worker_id → conversation_id mapping from worker_conversations.json."""
+    path = os.path.join(os.path.dirname(__file__) or ".", "worker_conversations.json")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        logger.warning("worker_conversations.json not found — messages will fall back to private chat")
+        return {}
+    except Exception as e:
+        logger.warning(f"Could not load worker_conversations.json: {e}")
+        return {}
+
+
+def send_connecteam_chat(user_id, text) -> bool:
+    """
+    Send to worker's group conversation (preferred) or private message (fallback).
+    """
+    sender_id = int(os.environ.get("CONNECTEAM_SENDER_ID", "0") or "0")
+    if not sender_id:
+        logger.warning("CONNECTEAM_SENDER_ID not set — message not sent to worker")
+        return False
+    conv_map = load_worker_conversations()
+    conv_id  = conv_map.get(str(user_id))
+    if conv_id:
+        try:
+            r = requests.post(
+                f"{BASE_URL}/chat/v1/conversations/{conv_id}/message",
+                headers={"X-API-KEY": CONNECTEAM_API_KEY, "Content-Type": "application/json"},
+                json={"senderId": sender_id, "text": text[:4000]},
+                timeout=15,
+            )
+            if r.ok:
+                return True
+        except Exception:
+            pass
+    try:
+        r = requests.post(
+            f"{BASE_URL}/chat/v1/conversations/privateMessage/{user_id}",
+            headers={"X-API-KEY": CONNECTEAM_API_KEY, "Content-Type": "application/json"},
+            json={"senderId": sender_id, "text": text[:4000]},
+            timeout=15,
+        )
+        return r.ok
+    except Exception:
+        return False
+
+
+def _worker_send(user_id, msg, force=False) -> bool:
+    """Send to a worker, respecting quiet hours unless force=True (safety critical)."""
+    if _is_quiet_hours() and not force:
+        ts = datetime.datetime.now(AEST).strftime("%I:%M %p")
+        logger.info(f"[quiet hours {ts}] skipping message to user {user_id}")
+        return False
+    return send_connecteam_chat(user_id, msg)
+
+
+def send_msg_sms(phone, text) -> bool:
+    """Send via WhatsApp or SMS (Twilio fallback)."""
+    wa_number = os.environ.get("TWILIO_WHATSAPP_NUMBER", "")
+    sid       = os.environ.get("TWILIO_ACCOUNT_SID", "")
+    tok       = os.environ.get("TWILIO_AUTH_TOKEN", "")
+    from_num  = os.environ.get("TWILIO_NUMBER", "")
+    if not sid or not tok:
+        return False
+    try:
+        from twilio.rest import Client
+        client = Client(sid, tok)
+        if wa_number:
+            client.messages.create(from_=f"whatsapp:{wa_number}", body=text[:1600], to=f"whatsapp:{phone}")
+        else:
+            client.messages.create(from_=from_num, body=text[:1600], to=phone)
+        return True
+    except Exception as e:
+        logger.error(f"SMS send failed: {e}")
+        return False
+
+
+# ── Claude helpers ─────────────────────────────────────────────────────────────
+
+def _call_claude(prompt, max_tokens=300):
+    """Call Claude Haiku and return the text response. Returns None on failure."""
+    if not ANTHROPIC_API_KEY:
+        return None
+    try:
+        import anthropic
+        client   = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        response = client.messages.create(
+            model="claude-haiku-4-5",
+            max_tokens=max_tokens,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = response.content[0].text.strip()
+        if "```" in raw:
+            raw = re.sub(r"```(?:json)?\n?", "", raw).strip()
+        return raw
+    except Exception as e:
+        logger.warning(f"Claude call failed: {e}")
+        return None
 
 
 # ── Reply generation ───────────────────────────────────────────────────────────
 
-def generate_reply(worker_first: str, history: str, profile_context: str = "") -> str:
+def generate_amy_reply(worker_name, text, issues, verification="", history=None):
+    """
+    Classify worker message (SIMPLE/COMPLEX) and generate Amy's reply.
+    Returns (is_complex: bool, reply_text: str).
+    """
+    first = worker_name.split()[0]
     if not ANTHROPIC_API_KEY:
-        return "Got it, thanks for letting me know."
+        return False, f"Hey {first}, got your message — I'll be in touch."
+
+    issues_summary = "\n".join(
+        f"- [{i.get('Severity','?')}] {i.get('Issue','?')}: {i.get('Detail','')[:100]}"
+        for i in (issues or [])[:5]
+    ) or "No open compliance issues."
+
+    history_lines = ""
+    if history:
+        for turn in history[-6:]:
+            label = "Amy" if turn["role"] == "amy" else first
+            history_lines += f"{label}: {turn['text']}\n"
+
+    verif_line = f"\nVerification result: {verification}" if verification else ""
+
+    prompt = f"""You are Amy, a support coordinator at Connect Care in Melbourne. You're texting {first} on a work chat app about their NDIS shifts.
+
+Their open compliance issues:
+{issues_summary}
+
+{f"Recent conversation:{chr(10)}{history_lines}" if history_lines else ""}
+{first} just said: "{text}"{verif_line}
+
+Decide: SIMPLE (you can handle it — they explained, sorted, or it's minor) or COMPLEX (needs a manager, they're disputing something, needs investigation).
+
+Write Amy's reply. Non-negotiable rules:
+- Sound like a real person texting, not a compliance system. Casual, warm, direct.
+- NEVER use these words/phrases: noted, acknowledged, please note, please be advised, I need you to, ensure that, outstanding issues, at your earliest convenience, flagged, I have logged, this matter, please ensure, going forward, action this, your attention, I will escalate
+- NO bullet points, NO numbered lists
+- If this isn't the first message (check history), don't open with "Hi {first}" — vary your opener
+- Max 2 sentences. Get to the point.
+- If notes verified present: "yeah can see them now, all good" style
+- If notes not found yet: "can't see them yet — did they save properly?" style
+- If PENDING ADMIN APPROVAL in verification: acknowledge they submitted it and say it just needs approval from the admin side — classify COMPLEX so the manager can approve. Say something like "got it, just needs sign-off from our end — I'll get it sorted"
+- If COMPLEX: "leave it with me, I'll sort it out" NOT "I will escalate this to management"
+- If worker is asking something unrelated to compliance (shift swaps, leave etc): classify COMPLEX
+
+JSON only — no other text:
+{{"is_complex": true/false, "reply": "..."}}"""
+
+    raw = _call_claude(prompt, max_tokens=500)
+    if not raw:
+        return False, f"Hey {first}, got it — I'll be in touch."
     try:
-        import anthropic
-        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-        profile_block = f"\n\nWorker history:\n{profile_context}" if profile_context else ""
-        resp = client.messages.create(
-            model="claude-haiku-4-5",
-            max_tokens=200,
-            messages=[{"role": "user", "content": f"""You are Amy, a coordinator at Connect Care (an NDIS disability support provider).
-You previously sent a compliance message to {worker_first} about issues from their shift.{profile_block}
-
-Conversation so far:
-{history}
-
-Reply as Amy. Rules:
-- Casual and friendly — like texting a colleague
-- If the conversation history includes a [Manager] note, follow their instruction when replying to the worker
-- If they're explaining something, acknowledge it and say what needs to change going forward
-- If they say they've fixed it or will fix it, say great and confirm what you need to see (e.g. "just make sure it's in the system")
-- If they ask a question, answer it helpfully and briefly
-- If they mention anything serious, name the right person — don't say "the manager":
-  * Pay, hours, wages, timesheet, pay rate → "I'll check with Yusuf"
-  * Client behaviour, client wellbeing, client concerns, incidents at the house → "I'll check with Nada"
-  * Health, injury, medical, medication, nurse, wound, pain, sick → "I'll check with Fatima"
-  * If it spans multiple areas, pick the most relevant one
-- 1-3 sentences max — keep it short
-- No sign-off, no corporate language
-- Output just the message, nothing else"""}],
-        )
-        return resp.content[0].text.strip()
-    except Exception as e:
-        logger.error(f"Claude reply failed: {e}")
-        return "Got it, thanks for letting me know."
+        clean = raw.strip()
+        if "```" in clean:
+            clean = re.sub(r"```(?:json)?", "", clean).strip()
+        result = json.loads(clean)
+        reply  = result.get("reply") or ""
+        if not reply:
+            return False, f"Hey {first}, got it."
+        return result.get("is_complex", False), reply
+    except Exception:
+        m = re.search(r'"reply"\s*:\s*"([^"]+)"', raw)
+        if m:
+            return False, m.group(1)
+        return False, f"Hey {first}, got it."
 
 
 def generate_manager_reply(manager_first: str, message_text: str, context: str = "") -> str:
+    """Generate Amy's reply to a manager query in CC Management."""
     if not ANTHROPIC_API_KEY:
         return "On it."
     try:
         import anthropic
-        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        client        = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
         context_block = f"\n\nLive Connecteam data:\n{context}" if context else ""
         resp = client.messages.create(
             model="claude-haiku-4-5",
@@ -766,38 +1240,784 @@ Reply as Amy. Rules:
         return "On it."
 
 
-# ── Connecteam send / lookup ───────────────────────────────────────────────────
+def compose_from_guidance(worker_name, manager_guidance, original_reply, issues):
+    """
+    Manager gave direction in CC Management. Amy composes a proper message to the worker.
+    """
+    first = worker_name.split()[0]
+    if not ANTHROPIC_API_KEY:
+        return manager_guidance
+    issues_summary = "\n".join(
+        f"- [{i.get('Severity','?')}] {i.get('Issue','?')}: {i.get('Detail','')[:100]}"
+        for i in (issues or [])[:3]
+    ) or "General compliance matter."
+    prompt = f"""You are Amy, a coordinator at Connect Care. Write a message to a support worker based on what a manager just told you to say.
 
-def get_worker_name(user_id: str) -> str:
+Worker: {worker_name}
+Worker said: "{original_reply}"
+Issues: {issues_summary}
+Manager's guidance: "{manager_guidance}"
+
+Write Amy's reply to {first} based on what the manager said. Sound like a real person texting — casual, warm, direct. Use their first name. Don't mention the manager or that you were told what to say. 2-3 sentences max. Just the message, no extra text."""
+    result = _call_claude(prompt)
+    return result if result else manager_guidance
+
+
+def _generate_shift_end_msg(first_name, client_name, flags) -> str:
+    """Ask Claude to write a natural shift-end follow-up. Falls back to template."""
+    issues_desc = " and ".join(flags)
+    if not ANTHROPIC_API_KEY:
+        return f"Hey {first_name}, just checking on your shift at {client_name} — {issues_desc}. Can you sort that when you get a chance?"
+    prompt = f"""You are Amy, a support coordinator at Connect Care. Text {first_name} about their shift at {client_name}.
+
+Issue(s): {issues_desc}
+
+Write a casual, natural follow-up — like a real person texting a colleague. 2 sentences max.
+Rules: no bullet points, no "please note", no "outstanding", no "ensure", no "I need you to".
+Don't open with "Hi" every time. Vary your opener. Sound human.
+Just the message, nothing else."""
+    result = _call_claude(prompt)
+    return result or f"Hey {first_name}, just a quick one — {issues_desc} for {client_name}. Can you jump on that?"
+
+
+# ── Worker issues ──────────────────────────────────────────────────────────────
+
+def get_worker_issues(user_id) -> list:
+    """Return the most recent unresolved issues for this worker from the notification log."""
+    notifs = load_notifications()
+    for n in notifs:
+        if str(n.get("worker_id")) == str(user_id) and n.get("status") in ("Sent", "Acknowledged"):
+            return n.get("issues", [])
+    return []
+
+
+def verify_worker_claims(user_id, text):
+    """
+    Check Connecteam to verify claims the worker makes in their message.
+    Returns (plain-English verification string, is_resolved: bool).
+    """
+    text_lower = text.lower()
+    claim_keywords = ["submitted", "done", "updated", "fixed", "added", "sent", "completed",
+                      "uploaded", "filled", "put in", "just did", "sorted", "logged",
+                      "clocked", "clock out", "clocked out", "clocking out"]
+    if not any(w in text_lower for w in claim_keywords):
+        return "", False
+
+    approval_keywords = [
+        "correction", "amendment", "amended", "corrected", "adjust", "adjusted",
+        "wrong time", "wrong hours", "fix my time", "time fix", "change my time",
+        "missed clock", "forgot to clock", "change hours",
+    ]
+    if any(w in text_lower for w in approval_keywords):
+        return "time correction submitted — PENDING ADMIN APPROVAL (can't verify until approved)", False
+
+    results      = []
+    all_verified = True
+    today        = datetime.date.today().isoformat()
+    yesterday    = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
+    data         = ct_get(
+        f"/time-clock/v1/time-clocks/{TIME_CLOCK_ID}/time-activities",
+        {"startDate": yesterday, "endDate": today},
+    )
+    by_user   = (data.get("data") or {}).get("timeActivitiesByUsers") or []
+    activity  = next((e for e in by_user if str(e.get("userId")) == str(user_id)), None)
+    shifts    = (activity.get("shifts") or []) if activity else []
+
+    if any(w in text_lower for w in ["note", "notes", "shift note", "progress note"]):
+        found_note = False
+        for shift in shifts:
+            atts = shift.get("shiftAttachments") or []
+            note = get_note_text(atts)
+            if note and len(note.split()) >= 10:
+                found_note = True
+                break
+        results.append("shift notes: VERIFIED ✓" if found_note else "shift notes: NOT FOUND — can't see them yet")
+        if not found_note:
+            all_verified = False
+
+    if any(w in text_lower for w in ["clocked out", "clock out", "clocking out", "clocked off"]):
+        clocked_out = any((s.get("end") or {}).get("timestamp") for s in shifts)
+        results.append("clock-out: VERIFIED ✓" if clocked_out else "clock-out: NOT FOUND in time clock")
+        if not clocked_out:
+            all_verified = False
+
+    verified_str = ", ".join(results)
+    resolved     = bool(results) and all_verified
+    return verified_str, resolved
+
+
+# ── Event handlers ─────────────────────────────────────────────────────────────
+
+def handle_clock_in(data):
+    user_id = data.get("userId")
+    job_id  = data.get("jobId")
+    if not user_id:
+        return
+    worker_name = get_worker_name(user_id)
+    client_name = get_job_name(job_id) if job_id else "unknown client"
+    loc         = data.get("location") or data.get("locationData") or {}
+    clock_lat   = loc.get("latitude", 0)
+    clock_lon   = loc.get("longitude", 0)
+    logger.info(f"Clock-in: {worker_name} → {client_name} (GPS: {clock_lat}, {clock_lon})")
+
+
+def handle_admin_time_edit(data):
+    """FRAUD DETECTION: Admin manually edited a time entry — alert manager immediately."""
+    user_id   = data.get("userId")
+    editor_id = data.get("adminId") or data.get("editedBy")
+    job_id    = data.get("jobId")
+    if not user_id:
+        return
+    worker    = get_worker_name(user_id)
+    editor    = get_worker_name(editor_id) if editor_id else "An admin"
+    client    = get_job_name(job_id) if job_id else "unknown client"
+    old_start = data.get("previousStartTime") or data.get("oldStartTime") or ""
+    new_start = data.get("newStartTime") or data.get("startTime") or ""
+    old_end   = data.get("previousEndTime") or data.get("oldEndTime") or ""
+    new_end   = data.get("newEndTime") or data.get("endTime") or ""
+    alert = (
+        f"⚠️ TIME ENTRY EDITED — possible billing adjustment.\n\n"
+        f"Worker: {worker}\nClient: {client}\nEdited by: {editor}\n"
+    )
+    if old_start or old_end:
+        alert += f"Was: {old_start} – {old_end}\n"
+    if new_start or new_end:
+        alert += f"Now: {new_start} – {new_end}\n"
+    alert += "\nVerify this change is authorised and reflects actual hours worked."
+    logger.info(f"ADMIN TIME EDIT: {editor} edited {worker}'s entry for {client}")
+    if CONNECTEAM_API_KEY:
+        alert_cc_management(alert)
+
+
+def handle_auto_clock_out(data):
+    """System forced a clock-out — more urgent than a manual missed clock-out."""
+    user_id = data.get("userId")
+    job_id  = data.get("jobId")
+    if not user_id:
+        return
+    worker = get_worker_name(user_id)
+    client = get_job_name(job_id) if job_id else "unknown client"
+    first  = worker.split()[0] if worker else "there"
+    flags  = [
+        f"system auto clocked you out at {client} — you may not have clocked out manually",
+        "check your times are right and add notes if you haven't yet",
+    ]
+    msg  = _generate_shift_end_msg(first, client, flags)
+    sent = _worker_send(user_id, msg)
+    if sent:
+        append_to_conversation(user_id, "amy", msg)
+    elif not _is_quiet_hours():
+        phone = get_worker_phone(user_id)
+        if phone:
+            send_msg_sms(phone, msg)
+    logger.info(f"Auto clock-out alert sent to {worker} ({client})")
+
+
+def handle_shift_change(event_type, data):
+    """Alert manager when shifts are updated or deleted."""
+    job_id = data.get("jobId")
+    client = get_job_name(job_id) if job_id else "unknown client"
+    verb   = "updated" if "update" in event_type.lower() else "deleted"
+    msg    = f"📅 Roster change: shift for {client} was {verb}. Verify this change was authorised."
+    logger.info(f"Shift {verb}: {client}")
+    if CONNECTEAM_API_KEY:
+        alert_cc_management(msg)
+
+
+def handle_user_change(event_type, data):
+    """Alert manager on any HR change."""
+    user_id = data.get("userId")
+    name    = get_worker_name(user_id) if (user_id and CONNECTEAM_API_KEY) else str(user_id)
+    verb    = event_type.replace("user", "").strip().lower()
+    msg     = f"👤 HR change: {name} was {verb}. Verify this change was authorised."
+    logger.info(f"User change ({verb}): {name}")
+    if CONNECTEAM_API_KEY:
+        alert_cc_management(msg)
+
+
+def handle_clock_out(data):
+    """
+    Fires when a worker clocks out. Real-time checks: notes, GPS, short shift.
+    Messages the worker only if something is wrong.
+    """
+    user_id = data.get("userId")
+    job_id  = data.get("jobId")
+    if not user_id or int(user_id) in OBSERVER_IDS:
+        return
+
+    worker_name = get_worker_name(user_id)
+    client_name = get_job_name(job_id) if job_id else "your client"
+    first       = worker_name.split()[0] if worker_name else "there"
+    activity    = fetch_latest_activity(user_id)
+    worker_flags = []
+
+    if activity:
+        clock_in  = (activity.get("start") or {}).get("timestamp", 0)
+        clock_out = (activity.get("end")   or {}).get("timestamp", 0)
+        if clock_in and clock_out:
+            duration_min = (clock_out - clock_in) / 60
+            if duration_min < SHORT_SHIFT_MIN:
+                worker_flags.append(
+                    f"your shift was only {round(duration_min)} min — please check your times are correct"
+                )
+        if job_id:
+            job     = get_job_full(job_id)
+            job_gps = job.get("gps") or {}
+            job_lat = job_gps.get("latitude", 0)
+            job_lon = job_gps.get("longitude", 0)
+            if job_lat == 0 or job_lon == 0:
+                title_lc = (job.get("title") or "").lower()
+                for kw, (ov_lat, ov_lon, _r) in CLIENT_GPS_OVERRIDES.items():
+                    if kw in title_lc:
+                        job_lat, job_lon = ov_lat, ov_lon
+                        break
+            if job_lat != 0 and job_lon != 0:
+                loc   = (activity.get("start") or {}).get("locationData") or {}
+                c_lat = loc.get("latitude", 0)
+                c_lon = loc.get("longitude", 0)
+                if c_lat != 0 and c_lon != 0:
+                    dist = haversine_km(job_lat, job_lon, c_lat, c_lon)
+                    if dist > GPS_THRESHOLD_KM:
+                        worker_flags.append(
+                            f"your GPS at clock-in was {dist:.1f}km from "
+                            f"{client_name}'s address — please confirm you were at the right location"
+                        )
+        attachments   = activity.get("shiftAttachments") or []
+        note_text     = get_note_text(attachments)
+        notes_missing = not note_text or len(note_text.split()) < 10
+    else:
+        notes_missing = True
+
+    if notes_missing:
+        worker_flags.append(
+            "your shift notes haven't been submitted yet — please complete them within 24 hours"
+        )
+
+    if not worker_flags:
+        logger.info(f"Clock-out check passed for {worker_name} ({client_name}) — all good")
+        return
+
+    msg  = _generate_shift_end_msg(first, client_name, worker_flags)
+    sent = _worker_send(user_id, msg)
+    if sent:
+        append_to_conversation(user_id, "amy", msg)
+        today    = datetime.datetime.now(AEST).strftime("%Y-%m-%d")
+        notified = load_shift_notified()
+        notified[f"{user_id}_clockout_{today}"] = time.time()
+        save_shift_notified(notified)
+    elif not _is_quiet_hours():
+        phone = get_worker_phone(user_id)
+        if phone:
+            send_msg_sms(phone, msg)
+
+    logger.info(f"Clock-out check: {worker_name} ({client_name}) — flags: {worker_flags}")
+
+
+def handle_form_submitted(data):
+    """Log form submissions for audit trail."""
+    form_id = data.get("formId")
+    user_id = data.get("submittingUserId") or data.get("userId")
+    worker  = get_worker_name(user_id) if (user_id and CONNECTEAM_API_KEY) else str(user_id)
+    logger.info(f"Form {form_id} submitted by {worker}")
+
+
+def _post_to_cc_mgmt(relay):
+    """Ask CC Management what Amy should say to a worker."""
+    worker = relay["worker_name"]
+    first  = worker.split()[0]
+    issues_summary = "\n".join(
+        f"• [{i.get('Severity','?')}] {i.get('Issue','?')} — {i.get('Detail','')[:80]}"
+        for i in (relay.get("issues") or [])[:4]
+    ) or "(no open issues)"
+    msg = (
+        f"{first} sent Amy a message that needs a management response:\n\n"
+        f"\"{relay['reply']}\"\n\n"
+        f"Their open issues:\n{issues_summary}\n\n"
+        f"What should Amy say back to {first}? Reply here with your guidance and Amy will compose and send the message."
+    )
+    ok = post_to_conversation(CC_MGMT_CONV_ID, msg)
+    if not ok:
+        logger.error(
+            f"Failed to post relay to CC Management (conv {CC_MGMT_CONV_ID}) — "
+            f"manager won't see {worker}'s message. Check CC_MGMT_CONV_ID env var."
+        )
+
+
+def _handle_manager_instruction(instruction):
+    """
+    Manager posted a direct instruction to Amy in CC Management.
+    Amy parses and acts on it.
+    """
+    if not ANTHROPIC_API_KEY:
+        alert_cc_management("Got it — but AI key isn't set so I can't act on instructions right now.")
+        return
+    prompt = f"""You are Amy, a support coordinator at Connect Care. Your manager just sent you this instruction in a team chat:
+
+"{instruction}"
+
+Decide what to do:
+1. If they want you to message a specific worker: output JSON {{"action": "message_worker", "worker_name": "<first name or full name>", "message": "<what to say to the worker in your natural voice>"}}
+2. If they want you to do something you can't do (e.g. check a roster, approve something): output JSON {{"action": "cant_do", "reply": "<short reply acknowledging and explaining what you can't do>"}}
+3. If unclear or general: output JSON {{"action": "confirm", "reply": "<short confirmation or clarifying question>"}}
+
+JSON only."""
+    raw = _call_claude(prompt, max_tokens=300)
+    if not raw:
+        alert_cc_management("Got it — couldn't process that right now, try again in a sec.")
+        return
     try:
-        r = requests.get(f"{BASE_URL}/users/v1/users/{user_id}", headers=_h(), timeout=10)
-        if r.ok:
-            u = (r.json().get("data") or {}).get("user") or r.json().get("data") or {}
-            name = f"{u.get('firstName', '')} {u.get('lastName', '')}".strip()
-            return name or f"User {user_id}"
+        clean = raw.strip()
+        if "```" in clean:
+            clean = re.sub(r"```(?:json)?", "", clean).strip()
+        result = json.loads(clean)
     except Exception:
-        pass
-    return f"User {user_id}"
+        alert_cc_management("Got your message — let me know if you need something specific.")
+        return
+
+    action = result.get("action", "")
+    if action == "message_worker":
+        worker_name = result.get("worker_name", "").strip()
+        msg_to_send = result.get("message", "").strip()
+        if not worker_name or not msg_to_send:
+            alert_cc_management("Got it — couldn't figure out which worker or what to say. Can you be more specific?")
+            return
+        worker_id = _find_worker_id_by_name(worker_name)
+        if not worker_id:
+            alert_cc_management(f"Can't find a worker called '{worker_name}' in Connecteam. Double-check the name?")
+            return
+        sent = _worker_send(worker_id, msg_to_send)
+        if sent:
+            append_to_conversation(worker_id, "amy", msg_to_send)
+            alert_cc_management(f"Done — sent {worker_name}: \"{msg_to_send[:120]}\"")
+        else:
+            alert_cc_management(f"Tried to message {worker_name} but it didn't go through — might be quiet hours or a chat issue.")
+    elif action in ("cant_do", "confirm"):
+        reply = result.get("reply", "")
+        if reply:
+            alert_cc_management(reply)
 
 
-def send_message(conv_id: str, text: str) -> bool:
-    if not CONNECTEAM_API_KEY or not CONNECTEAM_SENDER_ID:
-        logger.warning("Connecteam credentials missing")
-        return False
+def handle_chat_reply(data):
+    """
+    Any worker message → Amy reads it, verifies any claims, and replies.
+    Flow:
+      1. Manager replied in CC Management → Amy composes from guidance and relays to worker.
+      2. Worker message → verify claims, classify, reply:
+         - Simple/verified → Amy closes it out.
+         - Complex → Amy holds, asks CC Management "what should I tell [worker]?"
+    """
+    global PENDING_RELAY_QUEUE
+    user_id = data.get("userId") or data.get("senderId")
+    text    = (data.get("text") or data.get("content") or "").strip()
+    conv_id = str(data.get("conversationId") or data.get("channelId") or "")
+    if not user_id or not text:
+        logger.info(f"[chat] skipped — userId={user_id!r} text={text[:40]!r}")
+        return
+
+    uid = int(user_id)
+    if uid in AMY_SENDER_IDS:
+        return
+
+    # ── Manager in CC Management → handle instruction or relay response ──────
+    if conv_id == CC_MGMT_CONV_ID and uid in OBSERVER_IDS:
+        text_lower = text.lower()
+        if PENDING_RELAY_QUEUE:
+            matched_idx = 0
+            for i, r in enumerate(PENDING_RELAY_QUEUE):
+                first_name = r["worker_name"].split()[0].lower()
+                if first_name in text_lower:
+                    matched_idx = i
+                    break
+            relay    = PENDING_RELAY_QUEUE.pop(matched_idx)
+            save_pending_relay(PENDING_RELAY_QUEUE)
+            wid      = relay["worker_id"]
+            wname    = relay["worker_name"]
+            composed = compose_from_guidance(wname, text, relay["reply"], relay.get("issues", []))
+            _worker_send(wid, composed)
+            append_to_conversation(wid, "amy", composed)
+            logger.info(f"Amy sent composed response to {wname} based on manager guidance")
+            if PENDING_RELAY_QUEUE:
+                _post_to_cc_mgmt(PENDING_RELAY_QUEUE[0])
+            return
+        # Check if it's a direct instruction to Amy ("Amy, message X...")
+        if "amy" in text_lower:
+            _handle_manager_instruction(text)
+        return
+
+    if uid in OBSERVER_IDS:
+        return
+
+    # ── Worker message ────────────────────────────────────────────────────────
+    worker = get_worker_name(user_id) if CONNECTEAM_API_KEY else str(user_id)
+    logger.info(f"Message from {worker}: '{text[:80]}'")
+
+    verification, is_resolved = verify_worker_claims(user_id, text)
+    if verification:
+        logger.info(f"Verification: {verification}")
+
+    issues   = get_worker_issues(user_id)
+    history  = get_conversation_history(user_id)
+    append_to_conversation(user_id, "worker", text)
+    is_complex, amy_reply = generate_amy_reply(worker, text, issues, verification, history)
+
+    if is_resolved:
+        mark_resolved(user_id)
+        logger.info(f"Marked RESOLVED for {worker} — verified by Connecteam API")
+    elif not is_complex or verification:
+        mark_acknowledged(user_id)
+
+    if amy_reply and SENDER_ID and CONNECTEAM_API_KEY:
+        safety_critical = _is_safety_critical(text)
+        _worker_send(user_id, amy_reply, force=safety_critical)
+        if safety_critical:
+            logger.info("[SAFETY OVERRIDE] quiet hours bypassed — safety-critical message detected")
+        append_to_conversation(user_id, "amy", amy_reply)
+        logger.info(f"Amy replied ({'holding' if is_complex else 'closed'}): '{amy_reply[:80]}'")
+
+    if is_complex:
+        relay = {"worker_id": user_id, "worker_name": worker, "reply": text, "issues": issues}
+        PENDING_RELAY_QUEUE.append(relay)
+        save_pending_relay(PENDING_RELAY_QUEUE)
+        if len(PENDING_RELAY_QUEUE) == 1:
+            _post_to_cc_mgmt(relay)
+        logger.info(f"Asked CC Management for guidance on {worker} ({len(PENDING_RELAY_QUEUE)} pending)")
+
+
+# ── Shift-end compliance scheduler ────────────────────────────────────────────
+
+def _schedule_all_shifts():
+    """
+    Fetch today's/tomorrow's shifts and set a timer for each.
+    Safe to call multiple times — already-scheduled shifts are skipped.
+    """
+    if not CONNECTEAM_API_KEY:
+        return
+    aest_now     = datetime.datetime.now(AEST)
+    window_start = int(aest_now.timestamp())
+    window_end   = int((aest_now + datetime.timedelta(hours=36)).timestamp())
     try:
-        r = requests.post(
-            f"{BASE_URL}/chat/v1/conversations/{conv_id}/message",
-            headers={**_h(), "Content-Type": "application/json"},
-            json={"senderId": int(CONNECTEAM_SENDER_ID), "text": text[:4000]},
+        r = requests.get(
+            f"{BASE_URL}/scheduler/v1/schedulers/{SCHEDULER_ID}/shifts",
+            headers={"X-API-KEY": CONNECTEAM_API_KEY},
+            params={"startTime": window_start, "endTime": window_end, "limit": 200},
             timeout=15,
         )
-        return r.ok
+        if not r.ok:
+            logger.warning(f"[scheduler] failed to fetch shifts: {r.status_code}")
+            return
+        shifts = (r.json().get("data") or {}).get("shifts") or []
     except Exception as e:
-        logger.error(f"Send message failed: {e}")
-        return False
+        logger.error(f"[scheduler] error fetching shifts: {e}")
+        return
+
+    scheduled = 0
+    for shift in shifts:
+        shift_id = shift.get("id", "")
+        end_ts   = shift.get("endTime", 0)
+        if not shift_id or not end_ts:
+            continue
+        with _SCHEDULED_LOCK:
+            if shift_id in _SCHEDULED_SHIFTS:
+                continue
+            _SCHEDULED_SHIFTS.add(shift_id)
+        fire_at = end_ts + 30 * 60
+        delay   = fire_at - time.time()
+        if delay < 0:
+            delay = 2
+        t = threading.Timer(delay, _fire_shift_check, args=(shift,))
+        t.daemon = True
+        t.start()
+        scheduled += 1
+    if scheduled:
+        logger.info(f"[scheduler] {scheduled} shift timer(s) set")
 
 
-# ── Debug endpoint (disabled in production) ────────────────────────────────────
+def _fire_shift_check(shift):
+    """Called by timer 30 min after a shift's scheduled end time."""
+    end_ts   = shift.get("endTime", 0)
+    shift_id = shift.get("id", "")
+    job_id   = shift.get("jobId")
+    assigned = shift.get("assignedUserIds") or []
+    notified = load_shift_notified()
+    for uid in assigned:
+        if uid in OBSERVER_IDS:
+            continue
+        key = f"{uid}_{shift_id}"
+        if key in notified:
+            continue
+        try:
+            sent = _run_shift_end_check(uid, job_id, end_ts, shift)
+            if sent is not None:
+                notified = load_shift_notified()
+                notified[key] = time.time()
+                save_shift_notified(notified)
+        except Exception as e:
+            logger.error(f"[shift-check] check failed for user {uid}: {e}")
+
+
+def _run_shift_end_check(user_id, job_id, sched_end_ts, shift):
+    """
+    Check a single worker's shift compliance after it should have ended.
+    Returns True if complete, None if API was unreachable (skips burning dedup key).
+    """
+    worker_name    = get_worker_name(user_id)
+    client_name    = get_job_name(job_id) if job_id else "your client"
+    first          = worker_name.split()[0]
+    end_dt         = datetime.datetime.fromtimestamp(sched_end_ts, tz=AEST)
+    sched_start_ts = shift.get("startTime") if isinstance(shift, dict) else None
+    if sched_start_ts:
+        start_dt  = datetime.datetime.fromtimestamp(sched_start_ts, tz=AEST)
+        start_str = start_dt.strftime("%I:%M %p").lstrip("0")
+        end_str   = end_dt.strftime("%I:%M %p").lstrip("0")
+        if start_dt.date() != end_dt.date():
+            shift_label = f"overnight shift ({start_str} – {end_str})"
+        else:
+            shift_label = f"{start_str} shift"
+    else:
+        start_dt    = None
+        shift_label = f"{end_dt.strftime('%I:%M %p').lstrip('0')} shift"
+
+    start_date = (start_dt.strftime("%Y-%m-%d") if start_dt else end_dt.strftime("%Y-%m-%d"))
+    end_date   = end_dt.strftime("%Y-%m-%d")
+    data       = ct_get(
+        f"/time-clock/v1/time-clocks/{TIME_CLOCK_ID}/time-activities",
+        {"startDate": start_date, "endDate": end_date},
+    )
+    by_user = (data.get("data") or {}).get("timeActivitiesByUsers") or []
+    if not data:
+        logger.warning(f"[shift-check] API error fetching time-activities for {worker_name} — skipping")
+        return None
+
+    activity = None
+    for entry in by_user:
+        if str(entry.get("userId")) == str(user_id):
+            all_shifts = entry.get("shifts") or []
+            if all_shifts and sched_start_ts:
+                activity = min(all_shifts,
+                               key=lambda s: abs((s.get("start") or {}).get("timestamp", 0) - sched_start_ts))
+            elif all_shifts:
+                activity = all_shifts[-1]
+            break
+
+    flags = []
+    if not activity:
+        flags.append(f"no clock-in found for your {shift_label} at {client_name}")
+    else:
+        clock_out = (activity.get("end") or {}).get("timestamp")
+        if not clock_out:
+            flags.append(
+                f"still clocked in at {client_name} — {shift_label} was scheduled to finish "
+                f"at {end_dt.strftime('%I:%M %p').lstrip('0')}"
+            )
+        atts = activity.get("shiftAttachments") or []
+        note = get_note_text(atts)
+        if not note or len(note.split()) < 10:
+            flags.append("shift notes haven't come through yet")
+
+    if not flags:
+        logger.info(f"[shift-check] {worker_name} ({client_name}) all good")
+        return True
+
+    today            = datetime.datetime.now(AEST).strftime("%Y-%m-%d")
+    already_notified = load_shift_notified()
+    if f"{user_id}_clockout_{today}" in already_notified:
+        logger.info(f"[shift-check] skipping {worker_name} — already messaged at clock-out")
+        return True
+
+    msg = _generate_shift_end_msg(first, client_name, flags)
+    sent = _worker_send(user_id, msg)
+    if sent:
+        append_to_conversation(user_id, "amy", msg)
+    logger.info(f"[shift-check] notified {worker_name}: {flags}")
+    return True
+
+
+def _midnight_refresh_loop():
+    """Re-run _schedule_all_shifts each day at midnight for the next day's roster."""
+    last_loaded = None
+    while True:
+        time.sleep(60)
+        today = datetime.datetime.now(AEST).strftime("%Y-%m-%d")
+        if today != last_loaded:
+            last_loaded = today
+            try:
+                _schedule_all_shifts()
+            except Exception as e:
+                logger.error(f"[scheduler] midnight refresh error: {e}")
+
+
+def _deadline_check_loop():
+    """Fire once per day at 5 PM AEST — alert manager about workers still unresolved."""
+    last_fired = None
+    while True:
+        time.sleep(60)
+        now   = datetime.datetime.now(AEST)
+        today = now.strftime("%Y-%m-%d")
+        if now.hour == 17 and now.minute < 5 and today != last_fired:
+            last_fired = today
+            try:
+                _run_5pm_deadline_check()
+            except Exception as e:
+                logger.error(f"[5PM] error: {e}")
+
+
+def _run_5pm_deadline_check():
+    """Alert manager about workers who haven't responded by 5 PM deadline."""
+    today   = datetime.datetime.now(AEST).strftime("%Y-%m-%d")
+    notifs  = load_notifications()
+    pending = [
+        n for n in notifs
+        if n.get("status") in ("Sent", "Escalated")
+        and (n.get("audit_date") == today or n.get("sent_at_iso", "").startswith(today))
+        and not n.get("dry_run")
+    ]
+    if not pending:
+        logger.info("[5PM] All workers responded — no action needed")
+        return
+    names = sorted({n.get("worker", "") for n in pending})
+    msg = (
+        f"5 PM deadline: {len(names)} worker(s) still haven't responded — "
+        f"{', '.join(names)}. Consider calling them directly."
+    )
+    alert_cc_management(msg)
+    logger.info(f"[5PM] CC Management alerted about: {', '.join(names)}")
+
+
+# ── Event log ring buffer ──────────────────────────────────────────────────────
+
+def _log_event(event, data, raw_body=None):
+    """Store a snapshot in the ring buffer; cap at 30 entries."""
+    entry = {
+        "ts":    datetime.datetime.now(AEST).strftime("%d %b %Y %I:%M:%S %p"),
+        "event": event,
+        "keys":  list(data.keys()) if isinstance(data, dict) else [],
+        "data":  {k: str(v)[:200] for k, v in (data.items() if isinstance(data, dict) else {})},
+    }
+    with _EVENT_LOG_LOCK:
+        _EVENT_LOG.insert(0, entry)
+        del _EVENT_LOG[30:]
+
+
+# ── Central event dispatcher ───────────────────────────────────────────────────
+
+def _process_event(payload):
+    """Route a Connecteam webhook payload to the correct handler."""
+    event = payload.get("eventType", "")
+    data  = payload.get("data", {})
+
+    # Dedup — Connecteam retries on timeout; don't process the same event twice
+    msg_id = str(data.get("messageId") or data.get("id") or "")
+    if msg_id:
+        with _SEEN_LOCK:
+            if msg_id in _SEEN_IDS:
+                return
+            _SEEN_IDS[msg_id] = time.time()
+            cutoff = time.time() - 3600
+            for k in list(_SEEN_IDS):
+                if _SEEN_IDS[k] < cutoff:
+                    del _SEEN_IDS[k]
+
+    _log_event(event, data)
+    logger.info(f"Event: {event}  keys={list(data.keys()) if isinstance(data, dict) else '?'}")
+
+    el = event.lower()
+    if event in ("timeActivityClockIn", "Time activity clock in") or el == "clock_in":
+        handle_clock_in(data)
+    elif event in ("timeActivityClockOut", "Time activity clock out") or el == "clock_out":
+        handle_clock_out(data)
+    elif event in ("timeActivityAutoClockOut", "Time activity auto clock out") or el == "auto_clock_out":
+        handle_auto_clock_out(data)
+    elif event in ("timeActivityAdminEdit", "Time activity admin edit",
+                   "timeActivityAdminAdd", "Time activity admin add") or el in ("admin_edit", "admin_add", "admin_delete"):
+        handle_admin_time_edit(data)
+    elif event in ("chatMessageCreated", "Chat message created") or el in (
+            "chat_message_created", "message_created", "chatmessagecreated"):
+        handle_chat_reply(data)
+    elif event in ("formSubmission", "Form Submission") or el == "form_submission":
+        handle_form_submitted(data)
+    elif "shift" in el:
+        handle_shift_change(event, data)
+    elif "user" in el and el not in ("chatmessagecreated", "chat_message_created"):
+        handle_user_change(event, data)
+
+
+# ── Startup ────────────────────────────────────────────────────────────────────
+
+@app.on_event("startup")
+async def startup():
+    global conversation_log, PENDING_RELAY_QUEUE
+    conversation_log = load_from_github()
+    logger.info(f"Loaded {len(conversation_log)} worker conversation(s) from GitHub")
+    PENDING_RELAY_QUEUE = load_pending_relay()
+    logger.info(f"Loaded {len(PENDING_RELAY_QUEUE)} pending relay item(s)")
+    _discover_resource_ids()
+    _schedule_all_shifts()
+    logger.info("Shift-end compliance scheduler started")
+    threading.Thread(target=_midnight_refresh_loop, daemon=True).start()
+    threading.Thread(target=_deadline_check_loop, daemon=True).start()
+    logger.info("Background loops started (midnight refresh, 5 PM deadline)")
+
+
+# ── FastAPI endpoints ──────────────────────────────────────────────────────────
+
+@app.post("/webhook/connecteam")
+async def handle_webhook(request: Request, background_tasks: BackgroundTasks):
+    """
+    Receive all Connecteam webhook events.
+    Returns 200 immediately and processes in background to avoid Connecteam timeouts.
+    """
+    body = await request.body()
+
+    # HMAC signature verification
+    if WEBHOOK_SECRET:
+        sig      = request.headers.get("X-Connecteam-Signature", "")
+        expected = hmac.new(WEBHOOK_SECRET.encode(), body, hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(sig, expected):
+            logger.warning("Webhook signature verification failed")
+            raise HTTPException(status_code=401, detail="Invalid signature")
+
+    try:
+        payload = json.loads(body)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+
+    event_type = payload.get("eventType", "")
+    logger.info(f"Webhook received: {event_type}")
+
+    background_tasks.add_task(_process_event, payload)
+    return JSONResponse({"status": "ok"})
+
+
+@app.get("/health")
+async def health():
+    return {
+        "status":          "ok",
+        "workers_tracked": len(conversation_log),
+        "time_clock_id":   _time_clock_id,
+        "scheduler_id":    _scheduler_id_dyn or SCHEDULER_ID,
+        "users_cached":    len(_users_cache),
+        "relay_queue":     len(PENDING_RELAY_QUEUE),
+        "quiet_hours":     _is_quiet_hours(),
+    }
+
+
+@app.get("/status")
+async def status():
+    return {
+        "sender_id":       SENDER_ID,
+        "amy_ids":         list(AMY_SENDER_IDS),
+        "ct_key_set":      bool(CONNECTEAM_API_KEY),
+        "ai_key_set":      bool(ANTHROPIC_API_KEY),
+        "webhook_secret":  bool(WEBHOOK_SECRET),
+        "relay_queue":     len(PENDING_RELAY_QUEUE),
+        "uptime":          datetime.datetime.now(AEST).isoformat(),
+    }
+
+
+@app.get("/debug")
+async def debug():
+    return JSONResponse(_EVENT_LOG)
+
 
 if os.environ.get("DEBUG", "").lower() == "true":
     @app.post("/webhook/debug")
@@ -813,125 +2033,3 @@ if os.environ.get("DEBUG", "").lower() == "true":
             return JSONResponse({"received": payload, "headers": dict(request.headers)})
         except Exception as e:
             return JSONResponse({"error": str(e)})
-
-
-# ── Webhook endpoint ───────────────────────────────────────────────────────────
-
-@app.post("/webhook/connecteam")
-async def handle_webhook(request: Request):
-    global conversation_log
-    try:
-        payload = await request.json()
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid JSON")
-
-    event_type = payload.get("eventType", "")
-    logger.info(f"Webhook received: {event_type} | full payload: {json.dumps(payload)}")
-
-    # Accept all known Connecteam chat event type formats
-    _et = event_type.lower().replace(" ", "_")
-    if _et not in ("message_created", "chat_message_created", "chatmessagecreated"):
-        return JSONResponse({"status": "ignored"})
-
-    data         = payload.get("data", {})
-    # Connecteam wraps the message object under data.message for chat events
-    msg          = (data.get("message") if isinstance(data.get("message"), dict) else None) or data
-    sender_id    = str(msg.get("senderId") or msg.get("userId") or msg.get("senderUserId") or "")
-    conv_id      = str(msg.get("conversationId") or msg.get("conversation_id") or data.get("conversationId") or "")
-    message_text = str(msg.get("content") or msg.get("text") or "").strip()
-    is_system    = bool(msg.get("isSystem") or msg.get("is_system") or data.get("isSystem"))
-    logger.info(f"Parsed: sender={sender_id} conv={conv_id} isSystem={is_system} text={message_text[:60]}")
-
-    # Ignore automated Connecteam system notifications (shift approvals, clock-in alerts, etc.)
-    if is_system:
-        logger.info("Ignoring system message")
-        return JSONResponse({"status": "system_message_ignored"})
-
-    # Also ignore known Connecteam automated message patterns
-    _SYSTEM_PATTERNS = (
-        "shift sent for approval", "shift approved", "shift rejected", "clock-in reminder",
-        "timesheet edit request", "timesheet has been edited", "timesheet edit",
-        "edit request", "requested an edit",
-    )
-    if any(message_text.lower().startswith(p) for p in _SYSTEM_PATTERNS):
-        logger.info(f"Ignoring automated pattern message: {message_text[:60]}")
-        return JSONResponse({"status": "automated_message_ignored"})
-
-    if sender_id == str(CONNECTEAM_SENDER_ID):
-        return JSONResponse({"status": "self_message"})
-
-    logger.info(f"Message in conv {conv_id} | CC_MGMT_CONV_ID={CC_MGMT_CONV_ID} | sender={sender_id}")
-
-    if sender_id in STAFF_IDS:
-        manager_name  = get_worker_name(sender_id)
-        manager_first = manager_name.split()[0]
-        logger.info(f"Manager {manager_name}: {message_text[:80]}")
-        is_cc_mgmt = (conv_id == CC_MGMT_CONV_ID)
-        try:
-            context = build_context(message_text) if is_cc_mgmt else ""
-        except Exception as e:
-            logger.error(f"build_context failed: {e}")
-            context = ""
-        if context:
-            logger.info(f"Context built ({len(context)} chars)")
-        try:
-            reply = generate_manager_reply(manager_first, message_text, context)
-        except Exception as e:
-            logger.error(f"generate_manager_reply failed: {e}")
-            reply = "Something went wrong on my end — try again in a sec."
-        send_message(conv_id, reply)
-        return JSONResponse({"status": "manager_replied"})
-
-    if sender_id not in conversation_log:
-        conversation_log = load_from_github()
-        logger.info(f"Reloaded conversation log: {len(conversation_log)} workers")
-
-    if not message_text:
-        return JSONResponse({"status": "empty_message"})
-
-    convo        = conversation_log[sender_id]
-    worker_name  = convo.get("worker_name", "worker")
-    worker_first = worker_name.split()[0]
-
-    convo["messages"].append({"sender": "worker", "text": message_text, "ts": int(time.time())})
-
-    history = "\n".join(
-        f"[Manager - {m.get('name', 'Manager')}]: {m['text']}" if m["sender"] == "manager"
-        else f"{'Amy' if m['sender'] == 'amy' else worker_name}: {m['text']}"
-        for m in convo["messages"][-10:]
-    )
-
-    profile         = get_worker_profile(sender_id, worker_name)
-    profile_context = _build_profile_context(profile)
-    update_worker_profile(sender_id, {
-        "worker_name": worker_name,
-        "reply_count": profile.get("reply_count", 0) + 1,
-    })
-
-    reply = generate_reply(worker_first, history, profile_context)
-
-    target_conv_id = convo.get("conversation_id") or conv_id
-    if not target_conv_id:
-        logger.error(f"No conversation_id for user {sender_id}")
-        return JSONResponse({"status": "no_conv_id"})
-
-    ok = send_message(target_conv_id, reply)
-    if ok:
-        convo["messages"].append({"sender": "amy", "text": reply, "ts": int(time.time())})
-        save_to_github(conversation_log)
-        logger.info(f"✓ Replied to {worker_name}: {reply[:80]}")
-        return JSONResponse({"status": "replied"})
-    else:
-        logger.error(f"Failed to send reply to {worker_name}")
-        return JSONResponse({"status": "send_failed"})
-
-
-@app.get("/health")
-async def health():
-    return {
-        "status": "ok",
-        "workers_tracked": len(conversation_log),
-        "time_clock_id": _time_clock_id,
-        "scheduler_id": _scheduler_id,
-        "users_cached": len(_users_cache),
-    }
