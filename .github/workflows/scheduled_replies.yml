@@ -1,0 +1,25 @@
+name: Scheduled Replies — Mohamed & Peter
+
+on:
+  schedule:
+    # 7:47 AM AEST 17 Jun 2026 = 21:47 UTC 16 Jun 2026
+    - cron: "47 21 16 6 *"
+  workflow_dispatch:
+
+jobs:
+  send-replies:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: pip install requests
+
+      - name: Send scheduled replies
+        env:
+          CONNECTEAM_API_KEY:   ${{ secrets.CONNECTEAM_API_KEY }}
+          CONNECTEAM_SENDER_ID: ${{ secrets.CONNECTEAM_SENDER_ID }}
+        run: python send_scheduled_replies.py
