@@ -1142,7 +1142,7 @@ def _call_claude(prompt, max_tokens=300):
 
 # ── Reply generation ───────────────────────────────────────────────────────────
 
-def generate_amy_reply(worker_name, text, issues, verification="", history=None):
+def generate_amy_reply(worker_name, text, issues, verification="", history=None, profile=None):
     """
     Classify worker message (SIMPLE/COMPLEX) and generate Amy's reply.
     Returns (is_complex: bool, reply_text: str).
@@ -1164,8 +1164,11 @@ def generate_amy_reply(worker_name, text, issues, verification="", history=None)
 
     verif_line = f"\nVerification result: {verification}" if verification else ""
 
-    prompt = f"""You are Amy, a support coordinator at Connect Care in Melbourne. You're texting {first} on a work chat app about their NDIS shifts.
+    profile_context = _build_profile_context(profile) if profile else ""
+    profile_section = f"\nWorker history:\n{profile_context}" if profile_context else ""
 
+    prompt = f"""You are Amy, a support coordinator at Connect Care in Melbourne. You're texting {first} on a work chat app about their NDIS shifts.
+{profile_section}
 Their open compliance issues:
 {issues_summary}
 
@@ -1672,8 +1675,9 @@ def handle_chat_reply(data):
 
     issues   = get_worker_issues(user_id)
     history  = get_conversation_history(user_id)
+    profile  = get_worker_profile(str(user_id), worker)
     append_to_conversation(user_id, "worker", text)
-    is_complex, amy_reply = generate_amy_reply(worker, text, issues, verification, history)
+    is_complex, amy_reply = generate_amy_reply(worker, text, issues, verification, history, profile)
 
     if is_resolved:
         mark_resolved(user_id)
