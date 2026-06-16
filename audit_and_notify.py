@@ -35,6 +35,14 @@ NOTIFY_SEVERITIES = {"CRITICAL", "HIGH"}
 
 SKIP_CATEGORIES = set()  # nothing skipped — credentials handled here now
 
+# Note categories that count toward declining quality trend
+NOTE_QUALITY_CATEGORIES = {
+    "NO SHIFT NOTES", "EMPTY NOTES", "INSUFFICIENT NOTES",
+    "DUPLICATE/COPY-PASTE NOTES", "POSSIBLE AI-GENERATED NOTE",
+    "FAILS NDIS STANDARD", "NOT PERSON-CENTRED", "NO PLAN GOAL REFERENCE",
+}
+DECLINING_DEDUP_DAYS = 14  # re-notify window for declining quality messages
+
 CRED_CATEGORIES         = {"EXPIRED CREDENTIAL", "CREDENTIAL EXPIRING SOON"}
 CRED_DEDUP_DAYS_EXPIRED = 1   # re-notify daily for expired credentials
 CRED_DEDUP_DAYS_SOON    = 7   # re-notify weekly for expiring-soon credentials
@@ -510,6 +518,157 @@ def check_unacknowledged_escalations(now: datetime.datetime, notified: dict, dry
                 v["escalated_48h"] = True
 
 
+# ── Declining note quality check-in ──────────────────────────────────────────
+
+def build_declining_notes_message(worker_first: str, total_issues: int,
+                                   recent_count: int, prior_count: int) -> str:
+    ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+    if ANTHROPIC_API_KEY:
+        try:
+            import anthropic
+            client_ai = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+            prompt = (
+                f"Write a short, gentle text message from Amy (a coordinator) to a support worker named {worker_first}.\n\n"
+                f"Context:\n"
+                f"- The worker has had {total_issues} note-related issues flagged in the last 2 weeks\n"
+                f"- In the most recent week: {recent_count} note issues\n"
+                f"- In the week before that: {prior_count} note issues\n"
+                f"- The pattern is getting worse, not better\n\n"
+                f"Rules:\n"
+                f"- Start with \"Hi {worker_first},\"\n"
+                f"- 2-3 sentences max\n"
+                f"- Acknowledge the pattern without being accusatory — be warm and curious, not managerial\n"
+                f"- Ask if anything is making notes harder to complete\n"
+                f"- Zero corporate language — no \"it has come to my attention\", \"I am writing to\", \"compliance\"\n"
+                f"- No sign-off\n"
+                f"- Output just the message, nothing else"
+            )
+            resp = client_ai.messages.create(
+                model="claude-haiku-4-5",
+                max_tokens=200,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            return resp.content[0].text.strip()
+        except Exception as e:
+            print(f"  [WARNING] Claude declining-notes message generation failed: {e}")
+
+    return (
+        f"Hi {worker_first}, I've noticed your shift notes have had a few issues over "
+        f"the last couple of weeks — {recent_count} this week vs {prior_count} the week before. "
+        "Is there anything making notes harder to get done at the moment? Happy to chat."
+    )
+
+
+def run_declining_notes(now: datetime.datetime, notified: dict,
+                         name_to_uid: dict, dry_run: bool) -> list:
+    """
+    Find workers with a rising trend of note-quality issues and send a gentle check-in.
+    Uses the already-loaded notified dict for both trend analysis and dedup.
+    Returns a list of worker names messaged.
+    """
+    print("\n--- Declining Note Quality Check ---")
+
+    now_ts        = now.timestamp()
+    recent_cutoff = now_ts - (7  * 86400)
+    prior_cutoff  = now_ts - (14 * 86400)
+
+    recent_counts = defaultdict(int)
+    prior_counts  = defaultdict(int)
+    total_counts  = defaultdict(int)
+
+    for fp, v in notified.items():
+        if not isinstance(v, dict):
+            continue
+        category = v.get("category", "")
+        worker   = v.get("worker", "")
+        if not worker or worker.lower() in {"(team)", "unknown", ""}:
+            continue
+        if category not in NOTE_QUALITY_CATEGORIES:
+            continue
+        if fp.startswith("declining_notes|"):
+            continue
+
+        sent_ts = v.get("sent_ts")
+        if not sent_ts:
+            date_str = v.get("date", "")
+            if not date_str:
+                continue
+            try:
+                dt = datetime.datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=AEST)
+                sent_ts = dt.timestamp()
+            except ValueError:
+                continue
+
+        if sent_ts >= prior_cutoff:
+            total_counts[worker] += 1
+            if sent_ts >= recent_cutoff:
+                recent_counts[worker] += 1
+            else:
+                prior_counts[worker] += 1
+
+    declining = [
+        (worker, total, recent_counts.get(worker, 0), prior_counts.get(worker, 0))
+        for worker, total in total_counts.items()
+        if total >= 3 and recent_counts.get(worker, 0) > prior_counts.get(worker, 0)
+    ]
+
+    print(f"  {len(declining)} worker(s) with declining note quality trend.")
+    if not declining:
+        return []
+
+    uid_to_user = {}
+    try:
+        users = fetch_all_users()
+        uid_to_user = {str(uid): u for uid, u in users.items()}
+    except Exception as e:
+        print(f"  [WARN] Could not fetch users for declining notes: {e}")
+
+    messaged = []
+    for worker_name, total, recent, prior in declining:
+        uid = name_to_uid.get(worker_name)
+        if not uid:
+            print(f"  [SKIP] {worker_name} — no UID found")
+            continue
+
+        dedup_key = f"declining_notes|{uid}"
+        if dedup_key in notified:
+            last_sent = notified[dedup_key].get("date", "")
+            try:
+                last_dt = datetime.datetime.strptime(last_sent, "%Y-%m-%d").replace(tzinfo=AEST)
+                if (now - last_dt).days < DECLINING_DEDUP_DAYS:
+                    print(f"  [SKIP] {worker_name} — check-in sent {(now - last_dt).days}d ago")
+                    continue
+            except ValueError:
+                pass
+
+        user         = uid_to_user.get(str(uid), {})
+        worker_first = user.get("firstName", worker_name.split()[0]) or worker_name.split()[0]
+
+        print(f"  Generating check-in for {worker_name} (total={total}, recent={recent}, prior={prior})...")
+        message = build_declining_notes_message(worker_first, total, recent, prior)
+
+        if dry_run:
+            print(f"  [DRY RUN] Would send to {worker_name}: {message[:120]}")
+            notified[dedup_key] = {"date": now.strftime("%Y-%m-%d"), "worker": worker_name, "category": "declining_notes"}
+            messaged.append(worker_name)
+        else:
+            ok, result = send_worker_message(uid, message, worker_name=worker_name)
+            if ok:
+                print(f"  ✓ Check-in sent to {worker_name}")
+                notified[dedup_key] = {
+                    "date":     now.strftime("%Y-%m-%d"),
+                    "worker":   worker_name,
+                    "category": "declining_notes",
+                    "sent_ts":  int(now.timestamp()),
+                }
+                messaged.append(worker_name)
+                time.sleep(1)
+            else:
+                print(f"  ✗ Failed to send to {worker_name}: {result}")
+
+    return messaged
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
@@ -781,8 +940,18 @@ def main():
     except Exception as e:
         print(f"  [WARN] Invoice reconciliation skipped: {e}")
 
+    # ── Declining note quality check-in ──────────────────────────────────────
+    declining_messaged = run_declining_notes(now, notified, name_to_uid, dry_run)
+    if declining_messaged:
+        post_to_management(
+            f"Note quality check-ins sent to: {', '.join(declining_messaged)}"
+        )
+    save_notified(notified)  # re-save with declining_notes dedup keys included
+
     print(f"\n{'='*60}")
     print(f"Done — {len(sent_ok)} shift + {len(cred_sent)} credential sent, {len(sent_err)} failed")
+    if declining_messaged:
+        print(f"       {len(declining_messaged)} declining-notes check-in(s) sent")
     print(f"{'='*60}\n")
 
 
