@@ -1718,12 +1718,19 @@ def handle_chat_reply(data):
         logger.info(f"Amy replied ({'holding' if is_complex else 'closed'}): '{amy_reply[:80]}'")
 
     if is_complex:
-        relay = {"worker_id": user_id, "worker_name": worker, "reply": text, "issues": issues}
-        PENDING_RELAY_QUEUE.append(relay)
-        save_pending_relay(PENDING_RELAY_QUEUE)
-        if len(PENDING_RELAY_QUEUE) == 1:
-            _post_to_cc_mgmt(relay)
-        logger.info(f"Asked CC Management for guidance on {worker} ({len(PENDING_RELAY_QUEUE)} pending)")
+        existing = next((r for r in PENDING_RELAY_QUEUE if r["worker_id"] == user_id), None)
+        if existing:
+            # Worker already has a pending relay — append the new message instead of spamming CC Management
+            existing.setdefault("additional_messages", []).append(text)
+            save_pending_relay(PENDING_RELAY_QUEUE)
+            logger.info(f"[relay] {worker} already pending — appended new message, no extra CC alert")
+        else:
+            relay = {"worker_id": user_id, "worker_name": worker, "reply": text, "issues": issues}
+            PENDING_RELAY_QUEUE.append(relay)
+            save_pending_relay(PENDING_RELAY_QUEUE)
+            if len(PENDING_RELAY_QUEUE) == 1:
+                _post_to_cc_mgmt(relay)
+            logger.info(f"Asked CC Management for guidance on {worker} ({len(PENDING_RELAY_QUEUE)} pending)")
 
 
 # ── Shift-end compliance scheduler ────────────────────────────────────────────
