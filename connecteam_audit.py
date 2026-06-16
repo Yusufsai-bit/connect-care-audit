@@ -1926,6 +1926,37 @@ def run_audit(days_back=7):
             "(team)", "Nicole Loveless", end_date,
             f"Incident Report submitted {nicole_incidents}x this week -- minimum is 1."))
 
+    # ── BSP REFERENCE CHECKING -- Kallan Jordan & Joshua Gatt ────────────────
+    # These clients have active Behaviour Support Plans. Shift notes must
+    # reference BSP strategies to demonstrate plan-directed support delivery.
+    BSP_KEYWORDS = [
+        "behaviour support", "bsp", "behaviour plan", "support plan",
+        "positive behaviour", "de-escalat", "trigger", "redirect",
+        "distract", "sensory", "routine", "structured activity",
+        "planned strategy", "planned activity", "abc form",
+    ]
+    BSP_CLIENT_KEYWORDS = {"kallan", "joshua", "josh"}
+
+    for uid, note_list in worker_notes.items():
+        worker_name_bsp = uname(uid)
+        for note_dlabel, note_client, note_text in note_list:
+            if not note_client:
+                continue
+            client_lower = note_client.lower()
+            if not any(kw in client_lower for kw in BSP_CLIENT_KEYWORDS):
+                continue
+            if word_count(note_text) < MIN_NOTE_WORDS:
+                continue  # too short to expect a BSP reference
+            note_lower = note_text.lower()
+            if not any(kw in note_lower for kw in BSP_KEYWORDS):
+                issues.append(Issue("MEDIUM", "MISSING BSP REFERENCE IN NOTE",
+                    worker_name_bsp, note_client, note_dlabel,
+                    f"Shift note for {note_client} does not reference the participant's "
+                    "Behaviour Support Plan strategies. NDIS requires notes to demonstrate "
+                    "that supports were delivered in accordance with the active BSP "
+                    "(e.g. reference to de-escalation strategies, triggers, routines, "
+                    "or specific BSP-directed activities)."))
+
     # ------------------------------------------
     # SECTION 6 -- ONBOARDING COMPLIANCE
     # ------------------------------------------
