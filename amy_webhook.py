@@ -1263,19 +1263,33 @@ Write Amy's reply to {first} based on what the manager said. Sound like a real p
     return result if result else manager_guidance
 
 
-def _generate_shift_end_msg(first_name, client_name, flags) -> str:
-    """Ask Claude to write a natural shift-end follow-up. Falls back to template."""
+def _generate_shift_end_msg(first_name, client_name, flags, history=None) -> str:
+    """Ask Claude to write a natural shift-end follow-up, informed by conversation history."""
     issues_desc = " and ".join(flags)
     if not ANTHROPIC_API_KEY:
         return f"Hey {first_name}, just checking on your shift at {client_name} — {issues_desc}. Can you sort that when you get a chance?"
-    prompt = f"""You are Amy, a support coordinator at Connect Care. Text {first_name} about their shift at {client_name}.
 
+    history_lines = ""
+    if history:
+        for turn in history[-6:]:
+            label = "Amy" if turn.get("role") == "amy" else first_name
+            history_lines += f"{label}: {turn.get('text', '')}\n"
+
+    history_section = f"\nRecent conversation:\n{history_lines}" if history_lines else ""
+    opener_rule = (
+        f"Do NOT open with 'Hi {first_name}' — there's an ongoing conversation, pick up the thread naturally."
+        if history_lines else "Don't open with 'Hi' every time. Vary your opener."
+    )
+
+    prompt = f"""You are Amy, a support coordinator at Connect Care. Text {first_name} about their shift at {client_name}.
+{history_section}
 Issue(s): {issues_desc}
 
 Write a casual, natural follow-up — like a real person texting a colleague. 2 sentences max.
 Rules: no bullet points, no "please note", no "outstanding", no "ensure", no "I need you to".
-Don't open with "Hi" every time. Vary your opener. Sound human.
-Just the message, nothing else."""
+{opener_rule}
+Don't repeat anything already covered in the conversation above.
+Sound human. Just the message, nothing else."""
     result = _call_claude(prompt)
     return result or f"Hey {first_name}, just a quick one — {issues_desc} for {client_name}. Can you jump on that?"
 
@@ -1824,7 +1838,8 @@ def _run_shift_end_check(user_id, job_id, sched_end_ts, shift):
         logger.info(f"[shift-check] skipping {worker_name} — already messaged at clock-out")
         return True
 
-    msg = _generate_shift_end_msg(first, client_name, flags)
+    history = get_conversation_history(user_id)
+    msg = _generate_shift_end_msg(first, client_name, flags, history=history)
     sent = _worker_send(user_id, msg)
     if sent:
         append_to_conversation(user_id, "amy", msg)
