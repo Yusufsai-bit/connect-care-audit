@@ -1731,7 +1731,8 @@ def _schedule_all_shifts():
     if not CONNECTEAM_API_KEY:
         return
     aest_now     = datetime.datetime.now(AEST)
-    window_start = int(aest_now.timestamp())
+    # Look back 4 hours so shifts that ended during a brief server outage are caught
+    window_start = int((aest_now - datetime.timedelta(hours=4)).timestamp())
     window_end   = int((aest_now + datetime.timedelta(hours=36)).timestamp())
     try:
         r = requests.get(
@@ -1760,8 +1761,10 @@ def _schedule_all_shifts():
             _SCHEDULED_SHIFTS.add(shift_id)
         fire_at = end_ts + 30 * 60
         delay   = fire_at - time.time()
+        if delay < -4 * 3600:
+            continue  # ended more than 4h ago — too stale to check
         if delay < 0:
-            continue  # shift already past — don't fire late into quiet hours
+            delay = random.uniform(10, 60)  # missed during outage — check soon
         t = threading.Timer(delay, _fire_shift_check, args=(shift,))
         t.daemon = True
         t.start()
