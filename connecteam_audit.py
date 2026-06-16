@@ -1632,17 +1632,40 @@ def run_audit(days_back=7):
             entry_num   = sub.get("entryNum", "?")
             answers     = sub.get("answers", [])
 
-            # Completeness -- any free-text/open-ended answer with content?
-            has_description = any(
-                a.get("questionType") in ("freeText", "openEnded")
-                and str(a.get("value", a.get("freeText", ""))).strip()
-                for a in answers
-            )
-            if not has_description:
+            # Completeness -- free-text description present and substantive?
+            desc_text = ""
+            for a in answers:
+                if a.get("questionType") in ("freeText", "openEnded"):
+                    val = str(a.get("value", a.get("freeText", ""))).strip()
+                    if val:
+                        desc_text = val
+                        break
+
+            if not desc_text:
                 issues.append(Issue("CRITICAL", "INCOMPLETE INCIDENT REPORT",
                     submitter, form_name, dlabel,
-                    f"Entry #{entry_num} -- submitted with no written description. "
+                    f"Entry #{entry_num} — submitted with no written description. "
                     "Non-compliant with NDIS incident documentation requirements."))
+            elif len(desc_text.split()) < 20:
+                issues.append(Issue("HIGH", "INCIDENT REPORT — DESCRIPTION TOO BRIEF",
+                    submitter, form_name, dlabel,
+                    f"Entry #{entry_num} — description is only {len(desc_text.split())} words: "
+                    f'"{desc_text[:120]}". NDIS requires sufficient detail to reconstruct the event.'))
+
+            # Check for witness / notification fields
+            answered_qs = {
+                str(a.get("questionText") or a.get("label") or "").lower(): str(a.get("value", "")).strip()
+                for a in answers
+            }
+            witness_answered = any(
+                "witness" in q or "notif" in q or "guardian" in q or "family" in q
+                for q, v in answered_qs.items() if v
+            )
+            if desc_text and not witness_answered:
+                issues.append(Issue("HIGH", "INCIDENT REPORT — MISSING WITNESS/NOTIFICATION",
+                    submitter, form_name, dlabel,
+                    f"Entry #{entry_num} — no witness or guardian/family notification recorded. "
+                    "NDIS requires documentation of who was notified after an incident."))
 
             # Timeliness -- gap between incident occurrence and submission
             incident_ts = next(
