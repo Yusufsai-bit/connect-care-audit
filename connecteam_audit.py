@@ -1009,6 +1009,7 @@ For EACH note return a JSON object with:
 - uses_subjective_language: true/false -- opinions instead of observations
 - mentions_mood_or_condition: true/false
 - mentions_supports_provided: true/false
+- references_plan_goals: true/false -- note links support provided to participant's NDIS plan goals or outcomes (e.g. "to support X with independence", "as per support plan", references to specific goals)
 - issues: [list of specific problems -- empty if none]
 - severity: "PASS", "LOW", "MEDIUM", or "HIGH"
 
@@ -1356,6 +1357,45 @@ def run_audit(days_back=7):
                                 "disabled on this worker's device. GPS compliance cannot be verified."))
 
     # ------------------------------------------
+    # SECTION 2B -- ROSTER VS ACTUAL HOURS
+    # ------------------------------------------
+    scheduled_hours_by_worker = defaultdict(float)  # uid -> total rostered hours
+    actual_hours_by_worker    = defaultdict(float)  # uid -> total clocked hours
+
+    for shift in scheduled_shifts:
+        sched_start = shift["startTime"]
+        sched_end   = shift["endTime"]
+        if sched_end <= now.timestamp():  # only count completed shifts
+            for uid in shift.get("assignedUserIds", []):
+                scheduled_hours_by_worker[uid] += (sched_end - sched_start) / 3600
+
+    for uid, acts in activities_by_user.items():
+        for act in acts:
+            ci = act["start"]["timestamp"]
+            co = act["end"]["timestamp"] if act.get("end") else None
+            if co:
+                actual_hours_by_worker[uid] += (co - ci) / 3600
+
+    all_roster_uids = set(scheduled_hours_by_worker) | set(actual_hours_by_worker)
+    for uid in all_roster_uids:
+        name    = uname(uid)
+        sched_h = scheduled_hours_by_worker.get(uid, 0)
+        actual_h = actual_hours_by_worker.get(uid, 0)
+        diff     = actual_h - sched_h
+        if sched_h == 0:
+            continue
+        if diff > 0.75:  # clocked more than 45 min over roster
+            issues.append(Issue("HIGH", "OVERBILLING RISK -- HOURS EXCEED ROSTER",
+                name, "(all clients)", "this period",
+                f"Clocked {actual_h:.1f}h but only rostered {sched_h:.1f}h "
+                f"({diff:+.1f}h). Verify all extra hours are authorised before billing."))
+        elif diff < -1.5:  # clocked more than 90 min under roster
+            issues.append(Issue("MEDIUM", "UNDERBILLING -- HOURS BELOW ROSTER",
+                name, "(all clients)", "this period",
+                f"Clocked {actual_h:.1f}h but rostered {sched_h:.1f}h "
+                f"({diff:+.1f}h). Worker may have left early or forgotten to clock in."))
+
+    # ------------------------------------------
     # SECTION 3 -- SHIFT NOTE QUALITY
     # ------------------------------------------
     notes_for_claude = []
@@ -1427,9 +1467,9 @@ def run_audit(days_back=7):
                     f"Note mentions: {', '.join(rest_hits)}. Requires formal restrictive practice authorisation and documentation."))
 
             if med_hits:
-                issues.append(Issue("MEDIUM", "MEDICATION MENTIONED -- VERIFY FORM FILED",
+                issues.append(Issue("HIGH", "MEDICATION MENTIONED -- VERIFY FORM FILED",
                     name, client, dlabel,
-                    f"Note mentions: {', '.join(med_hits[:3])}. Confirm medication form was submitted."))
+                    f"Note mentions: {', '.join(med_hits[:3])}. A Medication Administration Record (MAR) form must be submitted for every shift where medication is given — this is a mandatory NDIS requirement. Confirm form was filed or file it now."))
 
             # Queue for Claude
             dur_h  = round((clock_out - clock_in) / 3600, 1) if clock_out else None
@@ -1515,6 +1555,10 @@ def run_audit(days_back=7):
                 if not a.get("is_person_centred"):
                     issues.append(Issue("MEDIUM", "NOT PERSON-CENTRED", name, client, dlabel,
                         "Note fails to reflect the participant's dignity, voice, or choices."))
+
+                if not a.get("references_plan_goals"):
+                    issues.append(Issue("MEDIUM", "NO PLAN GOAL REFERENCE", name, client, dlabel,
+                        "Note does not link support provided to the participant's NDIS plan goals or outcomes. NDIS requires notes to demonstrate goal-directed support."))
         else:
             print("  [INFO] ANTHROPIC_API_KEY not set -- skipping AI note quality assessment.")
 
