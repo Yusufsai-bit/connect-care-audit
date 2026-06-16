@@ -1646,24 +1646,30 @@ def handle_chat_reply(data):
     # ── Manager in CC Management → handle instruction or relay response ──────
     if conv_id == CC_MGMT_CONV_ID and uid in OBSERVER_IDS:
         text_lower = text.lower()
+        # Only treat as relay guidance if there are pending workers AND the message
+        # looks like a response (contains a worker name OR a clear directive).
+        # Prevents casual manager chat from accidentally triggering a worker send.
         if PENDING_RELAY_QUEUE:
-            matched_idx = 0
+            RELAY_TRIGGERS = {"tell", "say", "let them know", "message", "reply", "respond", "send"}
+            has_directive   = any(t in text_lower for t in RELAY_TRIGGERS)
+            matched_idx     = None
             for i, r in enumerate(PENDING_RELAY_QUEUE):
                 first_name = r["worker_name"].split()[0].lower()
-                if first_name in text_lower:
+                if first_name in text_lower and (has_directive or len(PENDING_RELAY_QUEUE) == 1):
                     matched_idx = i
                     break
-            relay    = PENDING_RELAY_QUEUE.pop(matched_idx)
-            save_pending_relay(PENDING_RELAY_QUEUE)
-            wid      = relay["worker_id"]
-            wname    = relay["worker_name"]
-            composed = compose_from_guidance(wname, text, relay["reply"], relay.get("issues", []))
-            _worker_send(wid, composed)
-            append_to_conversation(wid, "amy", composed)
-            logger.info(f"Amy sent composed response to {wname} based on manager guidance")
-            if PENDING_RELAY_QUEUE:
-                _post_to_cc_mgmt(PENDING_RELAY_QUEUE[0])
-            return
+            if matched_idx is not None:
+                relay    = PENDING_RELAY_QUEUE.pop(matched_idx)
+                save_pending_relay(PENDING_RELAY_QUEUE)
+                wid      = relay["worker_id"]
+                wname    = relay["worker_name"]
+                composed = compose_from_guidance(wname, text, relay["reply"], relay.get("issues", []))
+                _worker_send(wid, composed)
+                append_to_conversation(wid, "amy", composed)
+                logger.info(f"Amy sent composed response to {wname} based on manager guidance")
+                if PENDING_RELAY_QUEUE:
+                    _post_to_cc_mgmt(PENDING_RELAY_QUEUE[0])
+                return
         # Check if it's a direct instruction to Amy ("Amy, message X...")
         if "amy" in text_lower:
             _handle_manager_instruction(text)
