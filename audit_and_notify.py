@@ -766,6 +766,21 @@ def main():
     if not dry_run:
         _add_critical_profile_notes(issues, name_to_uid, now)
 
+    # ── Invoice reconciliation (current pay period) ───────────────────────────
+    try:
+        from invoice_check import reconcile, build_report, current_pay_period
+        start_date, end_date = current_pay_period()
+        inv_results  = reconcile(start_date, end_date)
+        flagged      = [r for r in inv_results if r["flags"]]
+        if flagged:
+            inv_report = build_report(inv_results, start_date, end_date)
+            post_to_management(inv_report)
+            print(f"Invoice reconciliation: {len(flagged)} worker(s) flagged — posted to CC Management.")
+        else:
+            print("Invoice reconciliation: all workers clear for current pay period.")
+    except Exception as e:
+        print(f"  [WARN] Invoice reconciliation skipped: {e}")
+
     print(f"\n{'='*60}")
     print(f"Done — {len(sent_ok)} shift + {len(cred_sent)} credential sent, {len(sent_err)} failed")
     print(f"{'='*60}\n")
