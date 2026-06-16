@@ -1737,7 +1737,7 @@ def _schedule_all_shifts():
         fire_at = end_ts + 30 * 60
         delay   = fire_at - time.time()
         if delay < 0:
-            delay = 2
+            continue  # shift already past — don't fire late into quiet hours
         t = threading.Timer(delay, _fire_shift_check, args=(shift,))
         t.daemon = True
         t.start()
