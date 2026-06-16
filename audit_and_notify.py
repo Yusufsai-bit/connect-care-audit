@@ -130,30 +130,62 @@ def save_notified(notified: dict):
 
 # ── Message generation ────────────────────────────────────────────────────────
 
-def build_worker_message(worker_name: str, issues: list) -> str:
+def _get_strike_count(worker_name: str, category: str, notified: dict) -> int:
+    """Count how many times this worker has been notified for this category in the last 30 days."""
+    cutoff = (datetime.datetime.now(AEST) - datetime.timedelta(days=30)).strftime("%Y-%m-%d")
+    return sum(
+        1 for v in notified.values()
+        if isinstance(v, dict)
+        and v.get("worker") == worker_name
+        and v.get("category") == category
+        and v.get("date", "") >= cutoff
+    )
+
+
+def build_worker_message(worker_name: str, issues: list, strike_counts: dict = None) -> str:
     """Generate a manager-tone compliance message via Claude Haiku."""
     from connecteam_audit import ANTHROPIC_API_KEY
     first = worker_name.split()[0]
+    strike_counts = strike_counts or {}
 
     issue_lines = []
     for iss in issues[:10]:
-        issue_lines.append(f"- [{iss.severity}] {iss.category} | {iss.client or 'N/A'} | {iss.date or 'N/A'}: {iss.detail}")
+        strike = strike_counts.get(iss.category, 0)
+        strike_note = f" [3rd+ offence]" if strike >= 2 else f" [2nd offence]" if strike == 1 else ""
+        issue_lines.append(f"- [{iss.severity}]{strike_note} {iss.category} | {iss.client or 'N/A'} | {iss.date or 'N/A'}: {iss.detail}")
     if len(issues) > 10:
         issue_lines.append(f"({len(issues) - 10} additional issues not listed)")
     issues_block = "\n".join(issue_lines)
+
+    max_strikes = max(strike_counts.values()) if strike_counts else 0
+    if max_strikes >= 2:
+        tone_instruction = (
+            "This worker has been flagged for the same issue 3 or more times. "
+            "The tone should be firm and direct — make clear this is serious and needs to stop. "
+            "Still no corporate language, but drop the casual friendliness. No threats, but no softening either."
+        )
+    elif max_strikes == 1:
+        tone_instruction = (
+            "This worker has been flagged for the same issue before. "
+            "Acknowledge this is a repeat and be a bit more direct than the first time."
+        )
+    else:
+        tone_instruction = "Friendly and casual — first time flagging these issues."
 
     if ANTHROPIC_API_KEY:
         try:
             import anthropic
             client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-            prompt = f"""Write a short casual text message from Amy (a coordinator) to a support worker named {first} about issues from their shifts.
+            prompt = f"""Write a short text message from Amy (a coordinator) to a support worker named {first} about issues from their shifts.
 
 Issues:
 {issues_block}
 
+Tone guidance: {tone_instruction}
+
 Rules:
 - Start with "Hi {first},"
-- Write like you're texting a colleague — short, friendly, straight to the point
+- Write like you're texting a colleague — short, straight to the point
 - Say what happened and what they need to do, nothing else
 - Use the client's name naturally (e.g. "at Kallan's", "at Joshua's place")
 - Use the actual day (e.g. "on Sunday", "yesterday")
@@ -274,34 +306,103 @@ def _add_critical_profile_notes(issues: list, name_to_uid: dict, now: datetime):
 
 def check_unacknowledged_escalations(now: datetime.datetime, notified: dict, dry_run: bool):
     """
-    Find CRITICAL issues sent 48+ hours ago with no worker acknowledgement.
-    Post to CC Management and log a formal notice to the worker's Connecteam profile.
+    Two-stage no-reply follow-up:
+    - 24h: Amy sends a follow-up directly to the worker
+    - 48h: escalate to CC Management for manager to call them directly
     """
-    threshold = int((now - datetime.timedelta(hours=48)).timestamp())
-    unacked   = {}  # worker_name -> [category, ...]
+    threshold_24h = int((now - datetime.timedelta(hours=24)).timestamp())
+    threshold_48h = int((now - datetime.timedelta(hours=48)).timestamp())
+
+    needs_24h_followup = {}   # worker_name -> {uid, cats}
+    needs_48h_escalate = {}   # worker_name -> [cats]
+
+    users       = fetch_all_users()
+    name_to_uid = {
+        f"{u.get('firstName','')} {u.get('lastName','')}".strip(): uid
+        for uid, u in users.items()
+    }
 
     for fp, v in notified.items():
         if not isinstance(v, dict):
             continue
-        if v.get("acknowledged"):
+        if v.get("acknowledged") or v.get("escalated_48h"):
             continue
         sent_ts = v.get("sent_ts")
-        if not sent_ts or sent_ts > threshold:
+        if not sent_ts:
             continue
         wname = v.get("worker", "Unknown")
         cat   = v.get("category", "compliance issue")
-        unacked.setdefault(wname, []).append(cat)
 
-    if not unacked:
-        print("No-reply check: all CRITICAL issues acknowledged within 48h.")
+        if sent_ts <= threshold_48h and not v.get("followup_24h_sent"):
+            needs_48h_escalate.setdefault(wname, []).append(cat)
+        elif sent_ts <= threshold_24h and not v.get("followup_24h_sent"):
+            uid = name_to_uid.get(wname)
+            if uid:
+                needs_24h_followup.setdefault(wname, {"uid": uid, "cats": []})["cats"].append(cat)
+
+    # ── 24h worker follow-up ──────────────────────────────────────────────────
+    if needs_24h_followup:
+        print(f"\n24h follow-up: {len(needs_24h_followup)} worker(s) haven't replied yet.")
+        sender_id = int(CONNECTEAM_SENDER_ID or "0")
+        conv_map  = load_worker_conversations() if not dry_run else {}
+        for wname, info in needs_24h_followup.items():
+            first = wname.split()[0]
+            uid   = info["uid"]
+            msg   = (
+                f"Hey {first}, just following up on the message I sent yesterday — "
+                f"still waiting to hear back from you on {', '.join(info['cats'][:2])}. "
+                f"Can you get back to me today?"
+            )
+            if dry_run:
+                print(f"  [DRY RUN] 24h follow-up to {wname}: {msg[:100]}")
+            elif sender_id and CONNECTEAM_API_KEY:
+                conv_id = conv_map.get(str(uid))
+                sent = False
+                if conv_id:
+                    try:
+                        r = requests.post(
+                            f"{BASE_URL}/chat/v1/conversations/{conv_id}/message",
+                            headers={"X-API-KEY": CONNECTEAM_API_KEY, "Content-Type": "application/json"},
+                            json={"senderId": sender_id, "text": msg},
+                            timeout=15,
+                        )
+                        sent = r.ok
+                    except Exception:
+                        pass
+                if not sent:
+                    try:
+                        r = requests.post(
+                            f"{BASE_URL}/chat/v1/conversations/privateMessage/{uid}",
+                            headers={"X-API-KEY": CONNECTEAM_API_KEY, "Content-Type": "application/json"},
+                            json={"senderId": sender_id, "text": msg},
+                            timeout=15,
+                        )
+                        sent = r.ok
+                    except Exception:
+                        pass
+                if sent:
+                    print(f"  ✓ 24h follow-up sent to {wname}")
+                else:
+                    print(f"  ✗ 24h follow-up failed for {wname}")
+        # Mark so we don't send again
+        for fp, v in notified.items():
+            if isinstance(v, dict) and v.get("worker") in needs_24h_followup:
+                sent_ts = v.get("sent_ts")
+                if sent_ts and sent_ts <= threshold_24h and not v.get("followup_24h_sent"):
+                    v["followup_24h_sent"] = True
+    else:
+        print("24h follow-up check: all workers replied or not yet due.")
+
+    # ── 48h manager escalation ────────────────────────────────────────────────
+    if not needs_48h_escalate:
+        print("48h escalation check: no workers overdue.")
         return
 
-    print(f"\nNo-reply escalation: {len(unacked)} worker(s) have not responded in 48+ hours.")
-
-    lines = ["⚠️ 48-hour no-reply escalation:\n"]
-    for wname, cats in unacked.items():
+    print(f"\n48h escalation: {len(needs_48h_escalate)} worker(s) still unresponsive.")
+    lines = ["⚠️ 48-hour no-reply escalation — manager action required:\n"]
+    for wname, cats in needs_48h_escalate.items():
         lines.append(f"• {wname} — {', '.join(cats[:3])} — no reply in 48h")
-    lines.append("\nAction required: please follow up with each worker directly or assign a formal notice.")
+    lines.append("\nPlease follow up with each worker directly.")
     msg = "\n".join(lines)
 
     if not dry_run:
@@ -314,17 +415,16 @@ def check_unacknowledged_escalations(now: datetime.datetime, notified: dict, dry
                     json={"senderId": sender_id, "text": msg[:4000]},
                     timeout=15,
                 )
-                print("  Posted 48h no-reply escalation to CC Management.")
+                print("  Posted 48h escalation to CC Management.")
             except Exception as e:
                 print(f"  [ERROR] Failed to post escalation: {e}")
     else:
         print(f"  [DRY RUN] Would post: {msg[:200]}")
 
-    # Mark escalated so we don't repeat next run
     for fp, v in notified.items():
-        if isinstance(v, dict) and not v.get("acknowledged") and v.get("worker") in unacked:
+        if isinstance(v, dict) and not v.get("acknowledged") and v.get("worker") in needs_48h_escalate:
             sent_ts = v.get("sent_ts")
-            if sent_ts and sent_ts <= threshold:
+            if sent_ts and sent_ts <= threshold_48h:
                 v["escalated_48h"] = True
 
 
@@ -418,8 +518,10 @@ def main():
             print(f"  [SKIP] {worker_name} — no user ID found in Connecteam")
             continue
 
-        print(f"  Generating message for {worker_name} ({len(worker_issues)} issues)...")
-        message = build_worker_message(worker_name, worker_issues)
+        strike_counts = {iss.category: _get_strike_count(worker_name, iss.category, notified) for iss in worker_issues}
+        max_strike    = max(strike_counts.values()) if strike_counts else 0
+        print(f"  Generating message for {worker_name} ({len(worker_issues)} issues, max strikes={max_strike})...")
+        message = build_worker_message(worker_name, worker_issues, strike_counts)
 
         if dry_run:
             print(f"  [DRY RUN] Would send to {worker_name}:\n{message[:200]}...\n")
@@ -442,6 +544,15 @@ def main():
                         "sent_ts": int(now.timestamp()), "acknowledged": False,
                         "category": iss.category, "client": iss.client or "",
                     }
+                # Repeat offender alert to CC Management (3rd+ strike)
+                repeat_cats = [cat for cat, count in strike_counts.items() if count >= 2]
+                if repeat_cats:
+                    repeat_msg = (
+                        f"⚠️ Repeat offender — {worker_name} has been flagged 3+ times for: "
+                        f"{', '.join(repeat_cats)}. Amy has sent a firm message. Consider a formal warning."
+                    )
+                    post_to_management(repeat_msg)
+
                 # Save to conversation log so smart reply has context
                 convo_log[str(uid)] = {
                     "worker_name":     worker_name,
