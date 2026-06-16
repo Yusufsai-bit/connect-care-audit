@@ -116,6 +116,28 @@ RESTRICTIVE_KEYWORDS = ["restrain", "physical intervention", "seclu", "locked in
 MEDICATION_KEYWORDS  = ["medication", "medicine", "tablet", "pill", " dose ", " mg",
                          "administer", "refused medic", "missed dose", "medic error"]
 
+# NDIS Reportable Incident Types (Incident Management and Reportable Incidents Rules 2018)
+# Type 1 — notify NDIS Commission within 24 hours
+TYPE1_INCIDENT_KEYWORDS = [
+    "death", "died", "passed away", "deceased",
+    "serious injur", "hospitalised", "hospitalized", "surgery", "icu", "intensive care",
+    "abuse", "neglect", "exploit", "financial abuse",
+    "assault", "attacked", "beaten", "physical attack",
+    "sexual", "inappropriate touching", "inappropriate contact",
+    "unexplained absence", "missing person", "cannot locate", "could not locate",
+    "restrictive practice", "restrain", "seclusion", "physical intervention",
+    "unlawful sexual", "sexual misconduct",
+]
+# Type 2 — notify NDIS Commission within 5 business days
+TYPE2_INCIDENT_KEYWORDS = [
+    "near miss", "close call",
+    "medication error", "wrong dose", "wrong medication",
+    "property damage", "stolen", "theft",
+    "verbal aggress", "verbal altercation", "verbal threat",
+    "fall", "fell", "slip", "trip", "bump",
+    "unauthorised absence",
+]
+
 
 # ---------------------------------------------
 # ISSUE MODEL
@@ -1666,6 +1688,28 @@ def run_audit(days_back=7):
                     submitter, form_name, dlabel,
                     f"Entry #{entry_num} — no witness or guardian/family notification recorded. "
                     "NDIS requires documentation of who was notified after an incident."))
+
+            # NDIS incident severity classification (Rules 2018, s.12)
+            if desc_text:
+                desc_lower = desc_text.lower()
+                type1_hits = [kw for kw in TYPE1_INCIDENT_KEYWORDS if kw in desc_lower]
+                if type1_hits:
+                    issues.append(Issue("CRITICAL",
+                        "TYPE 1 NOTIFIABLE INCIDENT — 24H NDIS COMMISSION REPORT REQUIRED",
+                        submitter, form_name, dlabel,
+                        f"Entry #{entry_num} — description contains Type 1 indicators: "
+                        f"{', '.join(type1_hits[:4])}. Under the NDIS (Incident Management and "
+                        "Reportable Incidents) Rules 2018, this must be notified to the NDIS "
+                        "Commission within 24 hours. Escalate to management immediately."))
+                else:
+                    type2_hits = [kw for kw in TYPE2_INCIDENT_KEYWORDS if kw in desc_lower]
+                    if type2_hits:
+                        issues.append(Issue("HIGH",
+                            "TYPE 2 NOTIFIABLE INCIDENT — 5-DAY NDIS COMMISSION REPORT REQUIRED",
+                            submitter, form_name, dlabel,
+                            f"Entry #{entry_num} — description suggests a Type 2 reportable incident: "
+                            f"{', '.join(type2_hits[:4])}. If confirmed, must be notified to the NDIS "
+                            "Commission within 5 business days under the NDIS Rules 2018."))
 
             # Timeliness -- gap between incident occurrence and submission
             incident_ts = next(
