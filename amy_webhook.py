@@ -886,18 +886,6 @@ async def handle_webhook(request: Request):
         conversation_log = load_from_github()
         logger.info(f"Reloaded conversation log: {len(conversation_log)} workers")
 
-    if sender_id not in conversation_log:
-        worker_name = get_worker_name(sender_id)
-        logger.info(f"No context for {worker_name} ({sender_id}) — sending welcome")
-        # Send a friendly default reply instead of spamming CC Management
-        send_message(
-            conv_id,
-            f"Hi {worker_name.split()[0]}! 👋 I'm Amy, the Connect Care compliance assistant. "
-            "I can help with shift questions, clock-in/out issues, and leave requests. "
-            "What do you need?"
-        )
-        return JSONResponse({"status": "welcomed_new_worker"})
-
     if not message_text:
         return JSONResponse({"status": "empty_message"})
 
