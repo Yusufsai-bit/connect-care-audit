@@ -358,7 +358,7 @@ def _check_credential_followups(now: datetime.datetime, notified: dict, name_to_
 
 def _lock_prior_days(name_to_uid: dict, now: datetime):
     """Lock time entries older than 3 days to prevent backdating."""
-    lock_date = (now - timedelta(days=3)).strftime("%Y-%m-%d")
+    lock_date = (now - datetime.timedelta(days=3)).strftime("%Y-%m-%d")
     locked = 0
     for uid in name_to_uid.values():
         ok, _ = lock_worker_days(uid, [lock_date])
