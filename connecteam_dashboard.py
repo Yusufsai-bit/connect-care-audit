@@ -384,13 +384,14 @@ st.markdown("<br>", unsafe_allow_html=True)
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
 
-tab_overview, tab_workers, tab_clients, tab_docs, tab_messages, tab_export = st.tabs([
+tab_overview, tab_workers, tab_clients, tab_docs, tab_messages, tab_export, tab_amy = st.tabs([
     "🚨 Action Required",
     "👤 Workers",
     "👥 Clients",
     "📄 Documents",
     "📬 Messages",
     "📋 Audit Package",
+    "💬 Amy",
 ])
 
 # ═══════════════════════════════════════════════════════
@@ -1128,3 +1129,196 @@ with tab_export:
 Rows are colour-coded: 🔴 red = Critical, 🟠 orange = High, 🟡 yellow = Medium.
 Headers are bold with a blue tint. Top row is frozen for easy scrolling.
         """)
+
+# ═══════════════════════════════════════════════════════
+# TAB 7 — Amy
+# ═══════════════════════════════════════════════════════
+with tab_amy:
+    import requests as _requests
+    import base64 as _base64
+
+    _GH_TOKEN = st.secrets.get("GITHUB_TOKEN", "") or os.environ.get("GITHUB_TOKEN", "")
+    _GH_REPO  = st.secrets.get("GITHUB_REPO",  "") or os.environ.get("GITHUB_REPO", "Yusufsai-bit/connect-care-audit")
+    _CT_API_KEY   = os.environ.get("CONNECTEAM_API_KEY", "")
+    _CT_SENDER_ID = os.environ.get("CONNECTEAM_SENDER_ID", "")
+    _CC_MGMT_CONV_ID = os.environ.get("CC_MGMT_CONV_ID", "")
+
+    def _amy_gh_load(filename, default):
+        """Load a JSON file from GitHub, falling back to local disk, then default."""
+        if _GH_TOKEN:
+            try:
+                r = _requests.get(
+                    f"https://api.github.com/repos/{_GH_REPO}/contents/{filename}",
+                    headers={"Authorization": f"token {_GH_TOKEN}", "Accept": "application/vnd.github.v3+json"},
+                    timeout=15,
+                )
+                if r.ok:
+                    return json.loads(_base64.b64decode(r.json()["content"]).decode())
+            except Exception:
+                pass
+        try:
+            local = os.path.join(os.path.dirname(__file__) or ".", filename)
+            with open(local, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return default
+
+    def _post_to_mgmt_conv(text):
+        """Post a message to the CC Management Connecteam conversation."""
+        sender_id = int(_CT_SENDER_ID or "0")
+        if not sender_id or not _CT_API_KEY or not _CC_MGMT_CONV_ID:
+            return False, "CONNECTEAM_SENDER_ID, CONNECTEAM_API_KEY, or CC_MGMT_CONV_ID not configured."
+        try:
+            r = _requests.post(
+                f"https://api.connecteam.com/chat/v1/conversations/{_CC_MGMT_CONV_ID}/message",
+                headers={"X-API-KEY": _CT_API_KEY, "Content-Type": "application/json"},
+                json={"senderId": sender_id, "text": text[:4000]},
+                timeout=15,
+            )
+            return r.ok, (None if r.ok else r.text[:200])
+        except Exception as e:
+            return False, str(e)
+
+    # ── Section 1: Relay Queue ──────────────────────────────────────────────────
+    st.markdown("### Relay Queue")
+    st.caption("Items where Amy is waiting for manager guidance before replying to a worker.")
+
+    relay_queue = _amy_gh_load("pending_relay_queue.json", [])
+
+    if not relay_queue:
+        st.success("No items waiting for manager guidance.")
+    else:
+        for idx, item in enumerate(relay_queue):
+            worker_name = item.get("worker_name") or item.get("worker_id", f"Worker {idx+1}")
+            reply       = item.get("reply", "")
+            issues      = item.get("issues", [])
+            worker_id   = item.get("worker_id", "")
+
+            with st.expander(f"**{worker_name}** — awaiting guidance", expanded=True):
+                st.markdown(f"**Worker message:** {reply}")
+                if issues:
+                    st.markdown("**Open issues:**")
+                    for iss in issues:
+                        st.markdown(f"- {iss}")
+
+                guidance = st.text_area(
+                    "Your guidance for Amy",
+                    placeholder="e.g. Tell the worker to check their roster and contact the office…",
+                    key=f"relay_guidance_{idx}",
+                )
+                if st.button("Send guidance", key=f"relay_send_{idx}", type="primary"):
+                    if not guidance.strip():
+                        st.warning("Please enter guidance text before sending.")
+                    else:
+                        msg = f"[Manager guidance re {worker_name}]: {guidance.strip()}"
+                        ok, err = _post_to_mgmt_conv(msg)
+                        if ok:
+                            st.success(f"Guidance sent to CC Management conversation.")
+                        else:
+                            st.error(f"Failed to send: {err}")
+
+    st.divider()
+
+    # ── Section 2: Active Conversations ────────────────────────────────────────
+    st.markdown("### Active Conversations")
+    st.caption("Recent Amy ↔ worker conversations loaded from GitHub.")
+
+    convo_log = _amy_gh_load("amy_conversation_log.json", {})
+
+    if not convo_log:
+        st.info("No conversation history found.")
+    else:
+        # Build summary rows, sorted by most recent message timestamp
+        convo_rows = []
+        for user_id, messages in convo_log.items():
+            if not isinstance(messages, list) or not messages:
+                continue
+            last_msg   = messages[-1]
+            last_role  = last_msg.get("role", "")
+            last_text  = last_msg.get("text", "")[:120]
+            last_ts    = last_msg.get("ts", "")
+            worker_name = user_id  # fallback; contacts lookup below
+            contacts    = get_contacts()
+            # Try to find a display name by matching user_id against contacts userId
+            for name, info in contacts.items():
+                if str(info.get("userId", "")) == str(user_id):
+                    worker_name = name
+                    break
+            convo_rows.append({
+                "user_id":     user_id,
+                "worker_name": worker_name,
+                "last_role":   last_role,
+                "last_text":   last_text,
+                "last_ts":     last_ts,
+                "messages":    messages,
+            })
+
+        # Sort most-recent first
+        convo_rows.sort(key=lambda x: x["last_ts"] or "", reverse=True)
+
+        for row in convo_rows:
+            sender_label = "Amy" if row["last_role"] == "assistant" else "Worker"
+            status_badge = (
+                '<span style="background:#ff7f0e;color:#fff;border-radius:12px;padding:2px 9px;font-size:0.78rem;font-weight:600">Awaiting worker reply</span>'
+                if row["last_role"] == "assistant"
+                else '<span style="background:#2ca02c;color:#fff;border-radius:12px;padding:2px 9px;font-size:0.78rem;font-weight:600">Worker replied</span>'
+            )
+            ts_display = row["last_ts"][:16].replace("T", " ") if row["last_ts"] else "—"
+
+            with st.expander(
+                f"**{row['worker_name']}** &nbsp; — &nbsp; last: {sender_label} at {ts_display}",
+                expanded=False,
+            ):
+                st.markdown(status_badge, unsafe_allow_html=True)
+                st.markdown(f"**Last message ({sender_label}):** {row['last_text']}")
+                st.markdown(f"**Total messages:** {len(row['messages'])}")
+                # Show last 5 messages in context
+                for m in row["messages"][-5:]:
+                    role_label = "Amy" if m.get("role") == "assistant" else "Worker"
+                    ts_m = (m.get("ts") or "")[:16].replace("T", " ")
+                    st.markdown(
+                        f'<div style="border-left:3px solid {"#4c78a8" if role_label=="Amy" else "#2ca02c"};'
+                        f'padding:0.3rem 0.7rem;margin:0.3rem 0;border-radius:4px;background:#fafafa">'
+                        f'<strong>{role_label}</strong> <span style="color:#aaa;font-size:0.8rem">{ts_m}</span><br>'
+                        f'{m.get("text","")[:300]}</div>',
+                        unsafe_allow_html=True,
+                    )
+
+    st.divider()
+
+    # ── Section 3: Unresponded Workers (24h+) ──────────────────────────────────
+    st.markdown("### Unresponded Workers")
+    st.caption("Workers where Amy sent the last message more than 24 hours ago and they haven't replied.")
+
+    now_utc = datetime.datetime.now(datetime.timezone.utc)
+    cutoff  = now_utc - datetime.timedelta(hours=24)
+
+    unresponded = []
+    for row in (convo_rows if convo_log else []):
+        if row["last_role"] != "assistant":
+            continue  # last message was from worker — they responded
+        try:
+            ts_str = row["last_ts"]
+            if ts_str:
+                # Parse ISO timestamp (with or without Z/+00:00)
+                ts_str_clean = ts_str.replace("Z", "+00:00")
+                last_dt = datetime.datetime.fromisoformat(ts_str_clean)
+                if last_dt.tzinfo is None:
+                    last_dt = last_dt.replace(tzinfo=datetime.timezone.utc)
+                if last_dt < cutoff:
+                    hours_ago = int((now_utc - last_dt).total_seconds() // 3600)
+                    unresponded.append((row["worker_name"], hours_ago, row["last_text"]))
+        except Exception:
+            pass
+
+    if not unresponded:
+        st.success("All workers have replied to Amy within the last 24 hours.")
+    else:
+        st.warning(f"{len(unresponded)} worker(s) haven't replied to Amy in 24+ hours:")
+        for worker_name, hours_ago, last_text in unresponded:
+            st.markdown(
+                f'<div class="row-card" style="border-left-color:#ff7f0e">'
+                f'🟠 <strong>{worker_name}</strong> — no reply for <strong>{hours_ago}h</strong><br>'
+                f'<span style="color:#666;font-size:0.87rem">Last Amy message: {last_text[:100]}</span></div>',
+                unsafe_allow_html=True,
+            )
