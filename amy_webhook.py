@@ -1340,20 +1340,54 @@ def verify_worker_claims(user_id, text, history=None):
     if any(w in text_lower for w in approval_keywords):
         return "time correction submitted — PENDING ADMIN APPROVAL (can't verify until approved)", False
 
-    # Pull Amy's last message to understand what was originally raised
-    amy_context = ""
+    # Build thread from last 5 messages (all participants) so we understand
+    # what was being discussed, not just what Amy said last
+    thread_lines = []
     if history:
-        for turn in reversed(history):
-            if turn.get("role") == "amy":
-                amy_context = turn.get("text", "").lower()
-                break
+        for turn in (history[-5:]):
+            role = "Amy" if turn.get("role") == "amy" else "Worker"
+            thread_lines.append(f"{role}: {turn.get('text', '')}")
+    thread_lines.append(f"Worker: {text}")
+    thread = "\n".join(thread_lines)
 
-    combined = text_lower + " " + amy_context
+    # Use Claude to classify what needs to be checked, falling back to keywords
+    check_notes = check_clockout = check_incident = check_mar = False
+    if ANTHROPIC_API_KEY:
+        try:
+            classify_prompt = f"""You are reading a compliance conversation between Amy (coordinator) and a worker at an NDIS disability support organisation.
 
-    check_notes    = any(w in combined for w in ["note", "notes", "shift note", "progress note", "no shift notes"])
-    check_clockout = any(w in combined for w in ["clock out", "clocked out", "auto-closed", "auto closed", "clock-out", "clocking out"])
-    check_incident = any(w in combined for w in ["incident report", "incident", "report filed"])
-    check_mar      = any(w in combined for w in ["medication", "mar form", "mar", "medication form"])
+Conversation (last 5 messages):
+{thread}
+
+The worker's latest message claims they have completed or fixed something. Based on the full conversation thread, identify what needs to be verified in Connecteam. Reply with JSON only — no other text:
+{{"check_notes": true/false, "check_clockout": true/false, "check_incident_report": true/false, "check_mar_form": true/false}}
+
+Rules:
+- check_notes: true if shift notes / progress notes were discussed
+- check_clockout: true if missing clock-out, auto clock-out, or clocking out was discussed
+- check_incident_report: true if an incident report form was discussed
+- check_mar_form: true if a medication administration record or medication form was discussed
+- Set only what is genuinely relevant to this thread — do not over-flag"""
+            raw = _call_claude(classify_prompt, max_tokens=80)
+            if raw:
+                clean = raw.strip()
+                if "```" in clean:
+                    clean = re.sub(r"```(?:json)?", "", clean).strip()
+                flags = json.loads(clean)
+                check_notes     = bool(flags.get("check_notes"))
+                check_clockout  = bool(flags.get("check_clockout"))
+                check_incident  = bool(flags.get("check_incident_report"))
+                check_mar       = bool(flags.get("check_mar_form"))
+        except Exception as e:
+            logger.warning(f"verify classification Claude call failed: {e} — falling back to keywords")
+
+    # Keyword fallback if Claude unavailable or failed
+    if not any([check_notes, check_clockout, check_incident, check_mar]):
+        combined       = thread.lower()
+        check_notes    = any(w in combined for w in ["note", "notes", "shift note", "progress note", "no shift notes"])
+        check_clockout = any(w in combined for w in ["clock out", "clocked out", "auto-closed", "auto closed", "clock-out"])
+        check_incident = any(w in combined for w in ["incident report", "report filed"])
+        check_mar      = any(w in combined for w in ["medication", "mar form", "mar", "medication form"])
 
     results      = []
     all_verified = True
