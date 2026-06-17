@@ -793,7 +793,7 @@ def main():
 
     for iss in issues:
         if iss.severity not in NOTIFY_SEVERITIES and not (
-            iss.severity == "MEDIUM" and iss.category in CRED_CATEGORIES
+            iss.severity == "MEDIUM" and iss.category in (CRED_CATEGORIES | {"UNSCHEDULED SHIFT"})
         ):
             continue
         if iss.category in SKIP_CATEGORIES:
@@ -870,6 +870,15 @@ def main():
                     )
                     post_to_management(repeat_msg)
 
+                # Unscheduled shift alert to CC Management
+                unscheduled = [i for i in worker_issues if i.category == "UNSCHEDULED SHIFT"]
+                for u in unscheduled:
+                    post_to_management(
+                        f"📋 Unscheduled shift — {worker_name} clocked in at {u.client} on {u.date} "
+                        f"with no roster entry. Amy has asked them for an explanation. "
+                        f"Once they reply, approve or reject the hours."
+                    )
+
                 # Save to conversation log so smart reply has context
                 convo_log[str(uid)] = {
                     "worker_name":     worker_name,
@@ -888,42 +897,6 @@ def main():
                 sent_err.append(worker_name)
 
     save_convo_log(convo_log)
-
-    # ── Unscheduled shift handling ────────────────────────────────────────────
-    unscheduled_issues = [
-        iss for iss in issues
-        if iss.category == "UNSCHEDULED SHIFT" and iss.worker.lower() not in TEAM_NAMES
-    ]
-    for iss in unscheduled_issues:
-        uid = name_to_uid.get(iss.worker)
-        if not uid:
-            continue
-        fp = issue_fingerprint(iss)
-        if fp in notified:
-            continue  # already handled this shift
-        first = iss.worker.split()[0]
-        worker_msg = (
-            f"Hey {first}, I noticed you clocked in at {iss.client} on {iss.date} "
-            f"but that shift wasn't on your roster. Can you let me know what happened? "
-            f"(e.g. did the client or family ask you to come?)"
-        )
-        mgmt_msg = (
-            f"📋 Unscheduled shift — {iss.worker} clocked in at {iss.client} on {iss.date} "
-            f"with no roster entry. Amy has asked them for an explanation. "
-            f"Once they reply, approve or reject the hours."
-        )
-        if not dry_run:
-            ok, _ = send_worker_message(uid, worker_msg, worker_name=iss.worker)
-            if ok:
-                post_to_management(mgmt_msg)
-                notified[fp] = {
-                    "date": now.strftime("%Y-%m-%d"), "worker": iss.worker,
-                    "sent_ts": int(now.timestamp()), "acknowledged": False,
-                    "category": iss.category, "client": iss.client or "",
-                }
-                print(f"  ✓ Unscheduled shift: asked {iss.worker}, alerted CC Management")
-        else:
-            print(f"  [DRY RUN] Unscheduled shift: would ask {iss.worker} about {iss.client} on {iss.date}")
 
     # ── Credential expiry notifications ───────────────────────────────────────
     cred_sent = []
