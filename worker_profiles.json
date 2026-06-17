@@ -15,5 +15,13 @@
     "last_issue_date": "17 Jun 2026",
     "last_issue_summary": "INCIDENT REPORT \u2014 DESCRIPTION TOO BRIEF (Medication Incident Form); INCIDENT REPORT \u2014 MISSING WITNESS/NOTIFICATION (Medication Incident Form); NO SHIFT NOTES (Evan Gatt)",
     "open_issues": []
+  },
+  "9736867": {
+    "worker_name": "Hajar El Hassan",
+    "last_issue_date": "17 Jun 2026",
+    "last_issue_summary": "LATE INCIDENT REPORTING (Incident Report); AUTO CLOCK-OUT (Nicole Loveless); INCIDENT REPORT \u2014 DESCRIPTION TOO BRIEF (Incident Report)",
+    "open_issues": [
+      "LATE INCIDENT REPORTING"
+    ]
   }
 }
