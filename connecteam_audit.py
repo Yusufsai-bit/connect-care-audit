@@ -1650,9 +1650,21 @@ def run_audit(days_back=7):
 
             sub_dt      = ts_aest(sub_ts)
             submitter   = uname(sub.get("submittingUserId")) if sub.get("submittingUserId") else "Unknown"
-            dlabel      = sub_dt.strftime("%a %d-%b")
             entry_num   = sub.get("entryNum", "?")
             answers     = sub.get("answers", [])
+
+            # Use the incident date recorded in the form (when it happened), not the submission
+            # date (when the report was filed). This prevents flagging workers for a day they
+            # didn't work just because they filed the form that day.
+            incident_ts = next(
+                (a["timestamp"] for a in answers
+                 if a.get("questionType") == "datetime" and a.get("timestamp")),
+                None
+            )
+            if incident_ts:
+                dlabel = ts_aest(incident_ts).strftime("%a %d-%b") + f" (filed {sub_dt.strftime('%d-%b')})"
+            else:
+                dlabel = sub_dt.strftime("%a %d-%b")
 
             # Completeness -- free-text description present and substantive?
             desc_text = ""
@@ -1712,11 +1724,6 @@ def run_audit(days_back=7):
                             "Commission within 5 business days under the NDIS Rules 2018."))
 
             # Timeliness -- gap between incident occurrence and submission
-            incident_ts = next(
-                (a["timestamp"] for a in answers
-                 if a.get("questionType") == "datetime" and a.get("timestamp")),
-                None
-            )
             if incident_ts:
                 delay_h = (sub_ts - incident_ts) / 3600
                 if delay_h > 120:
