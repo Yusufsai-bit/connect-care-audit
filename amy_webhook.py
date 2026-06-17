@@ -1316,15 +1316,19 @@ def get_worker_issues(user_id) -> list:
     return []
 
 
-def verify_worker_claims(user_id, text):
+def verify_worker_claims(user_id, text, history=None):
     """
     Check Connecteam to verify claims the worker makes in their message.
+    Uses Amy's last message in conversation history to infer what to check
+    when the worker's reply is generic ("done", "sorted") without specifying what.
     Returns (plain-English verification string, is_resolved: bool).
     """
     text_lower = text.lower()
-    claim_keywords = ["submitted", "done", "updated", "fixed", "added", "sent", "completed",
-                      "uploaded", "filled", "put in", "just did", "sorted", "logged",
-                      "clocked", "clock out", "clocked out", "clocking out"]
+    claim_keywords = [
+        "submitted", "done", "updated", "fixed", "added", "sent", "completed",
+        "uploaded", "filled", "put in", "just did", "sorted", "logged",
+        "clocked", "clock out", "clocked out", "clocking out", "i did", "all done",
+    ]
     if not any(w in text_lower for w in claim_keywords):
         return "", False
 
@@ -1336,35 +1340,93 @@ def verify_worker_claims(user_id, text):
     if any(w in text_lower for w in approval_keywords):
         return "time correction submitted — PENDING ADMIN APPROVAL (can't verify until approved)", False
 
+    # Pull Amy's last message to understand what was originally raised
+    amy_context = ""
+    if history:
+        for turn in reversed(history):
+            if turn.get("role") == "amy":
+                amy_context = turn.get("text", "").lower()
+                break
+
+    combined = text_lower + " " + amy_context
+
+    check_notes    = any(w in combined for w in ["note", "notes", "shift note", "progress note", "no shift notes"])
+    check_clockout = any(w in combined for w in ["clock out", "clocked out", "auto-closed", "auto closed", "clock-out", "clocking out"])
+    check_incident = any(w in combined for w in ["incident report", "incident", "report filed"])
+    check_mar      = any(w in combined for w in ["medication", "mar form", "mar", "medication form"])
+
     results      = []
     all_verified = True
     today        = datetime.date.today().isoformat()
     yesterday    = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
-    data         = ct_get(
-        f"/time-clock/v1/time-clocks/{TIME_CLOCK_ID}/time-activities",
-        {"startDate": yesterday, "endDate": today},
-    )
-    by_user   = (data.get("data") or {}).get("timeActivitiesByUsers") or []
-    activity  = next((e for e in by_user if str(e.get("userId")) == str(user_id)), None)
-    shifts    = (activity.get("shifts") or []) if activity else []
 
-    if any(w in text_lower for w in ["note", "notes", "shift note", "progress note"]):
-        found_note = False
-        for shift in shifts:
-            atts = shift.get("shiftAttachments") or []
-            note = get_note_text(atts)
-            if note and len(note.split()) >= 10:
-                found_note = True
-                break
-        results.append("shift notes: VERIFIED ✓" if found_note else "shift notes: NOT FOUND — can't see them yet")
-        if not found_note:
-            all_verified = False
+    # ── Time-clock checks (notes + clock-out) ────────────────────────────────
+    if check_notes or check_clockout:
+        try:
+            data     = ct_get(
+                f"/time-clock/v1/time-clocks/{TIME_CLOCK_ID}/time-activities",
+                {"startDate": yesterday, "endDate": today},
+            )
+            by_user  = (data.get("data") or {}).get("timeActivitiesByUsers") or []
+            activity = next((e for e in by_user if str(e.get("userId")) == str(user_id)), None)
+            shifts   = (activity.get("shifts") or []) if activity else []
 
-    if any(w in text_lower for w in ["clocked out", "clock out", "clocking out", "clocked off"]):
-        clocked_out = any((s.get("end") or {}).get("timestamp") for s in shifts)
-        results.append("clock-out: VERIFIED ✓" if clocked_out else "clock-out: NOT FOUND in time clock")
-        if not clocked_out:
-            all_verified = False
+            if check_notes:
+                found_note = any(
+                    len((get_note_text(s.get("shiftAttachments") or [])) or "").split() >= 10
+                    for s in shifts
+                )
+                results.append("shift notes: VERIFIED ✓" if found_note else "shift notes: NOT FOUND — can't see them yet")
+                if not found_note:
+                    all_verified = False
+
+            if check_clockout:
+                clocked_out = any((s.get("end") or {}).get("timestamp") for s in shifts)
+                results.append("clock-out: VERIFIED ✓" if clocked_out else "clock-out: NOT FOUND in time clock")
+                if not clocked_out:
+                    all_verified = False
+        except Exception as e:
+            logger.warning(f"verify_worker_claims time-clock error: {e}")
+
+    # ── Incident report check ────────────────────────────────────────────────
+    if check_incident:
+        try:
+            cutoff = datetime.datetime.now().timestamp() - 48 * 3600
+            data   = ct_get("/forms/v1/forms/9786979/form-submissions")
+            subs   = (data.get("data") or {}).get("formSubmissions") or []
+            recent = [
+                s for s in subs
+                if str(s.get("submittingUserId")) == str(user_id)
+                and s.get("submissionTimestamp", 0) > cutoff
+            ]
+            if recent:
+                entry = recent[-1].get("entryNum", "?")
+                results.append(f"incident report: VERIFIED ✓ (entry #{entry})")
+            else:
+                results.append("incident report: NOT FOUND — no submission from you in the last 48h")
+                all_verified = False
+        except Exception as e:
+            logger.warning(f"verify_worker_claims incident-report error: {e}")
+
+    # ── MAR / medication form check ──────────────────────────────────────────
+    if check_mar:
+        try:
+            cutoff = datetime.datetime.now().timestamp() - 48 * 3600
+            data   = ct_get("/forms/v1/forms/7294261/form-submissions")
+            subs   = (data.get("data") or {}).get("formSubmissions") or []
+            recent = [
+                s for s in subs
+                if str(s.get("submittingUserId")) == str(user_id)
+                and s.get("submissionTimestamp", 0) > cutoff
+            ]
+            if recent:
+                entry = recent[-1].get("entryNum", "?")
+                results.append(f"medication form: VERIFIED ✓ (entry #{entry})")
+            else:
+                results.append("medication form: NOT FOUND — no submission from you in the last 48h")
+                all_verified = False
+        except Exception as e:
+            logger.warning(f"verify_worker_claims MAR error: {e}")
 
     verified_str = ", ".join(results)
     resolved     = bool(results) and all_verified
@@ -1682,12 +1744,12 @@ def handle_chat_reply(data):
     worker = get_worker_name(user_id) if CONNECTEAM_API_KEY else str(user_id)
     logger.info(f"Message from {worker}: '{text[:80]}'")
 
-    verification, is_resolved = verify_worker_claims(user_id, text)
-    if verification:
-        logger.info(f"Verification: {verification}")
-
     issues   = get_worker_issues(user_id)
     history  = get_conversation_history(user_id)
+
+    verification, is_resolved = verify_worker_claims(user_id, text, history=history)
+    if verification:
+        logger.info(f"Verification: {verification}")
     profile  = get_worker_profile(str(user_id), worker)
     append_to_conversation(user_id, "worker", text)
     is_complex, amy_reply = generate_amy_reply(worker, text, issues, verification, history, profile)
