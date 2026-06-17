@@ -219,6 +219,7 @@ Rules:
 - Zero corporate language — no "identified", "compliance", "noted", "I am writing", "please be advised", "regarding"
 - No sign-off
 - If the issue is missing notes or forms, remind them these need to be done within 30 minutes of the shift ending — casual, not a lecture
+- ONLY reference issues explicitly listed above — do not add, infer, or mention anything that is not in the list (no "a few of your shifts", no roster speculation, no general reminders beyond what's listed)
 - Output just the message, nothing else"""
 
             resp = client.messages.create(
