@@ -761,12 +761,9 @@ def detect_worker_conversations():
 
 def send_worker_message(user_id, text, worker_name=None):
     """
-    Send a Connecteam chat message to the worker.
-    If a per-worker compliance group conversation exists (detected via
-    detect_worker_conversations), sends to that group — so the worker and all
-    management observers (Yusuf, Nada, Faduma) see it in one shared thread.
-    Falls back to a private message + separate CC to each observer if no group
-    conversation mapping is found.
+    Send a Connecteam chat message to the worker's group conversation.
+    Never falls back to private — if the group conv is missing or fails,
+    returns (False, reason) so the issue is visible rather than silent.
     Returns (True, message_id) on success or (False, error_string) on failure.
     """
     if not CONNECTEAM_SENDER_ID:
@@ -775,36 +772,33 @@ def send_worker_message(user_id, text, worker_name=None):
     conv_map = load_worker_conversations()
     conv_id  = conv_map.get(str(user_id))
 
-    if conv_id:
-        # Route to the per-worker group conversation
-        ok, result = ct_post(
-            f"/chat/v1/conversations/{conv_id}/message",
-            {"senderId": CONNECTEAM_SENDER_ID, "text": text[:4000]},
-        )
-        if ok:
-            msg_id = (result.get("data") or {}).get("messageId") or result.get("messageId")
-            return True, msg_id
-        # Group conv failed (stale ID, deleted group, etc.) — fall through to private message
-        print(f"[WARN] Group conv {conv_id} failed for user {user_id}: {result} — falling back to private message")
+    label = worker_name or f"User {user_id}"
 
-    # Fallback: private message to worker + separate CC to each observer
+    def _fail(reason):
+        print(f"[ERROR] send_worker_message failed for {label}: {reason}")
+        fail_alert = f"⚠️ Amy couldn't send a message to {label} ({reason}). Message was:\n\n{text[:500]}"
+        # Alert CC Management and DM Yusuf so nothing is missed
+        yusuf_id = 2149475
+        for target in [CC_MGMT_CONV_ID, None]:
+            endpoint = (
+                f"/chat/v1/conversations/{target}/message"
+                if target else
+                f"/chat/v1/conversations/privateMessage/{yusuf_id}"
+            )
+            ct_post(endpoint, {"senderId": CONNECTEAM_SENDER_ID, "text": fail_alert[:1000]})
+        return False, reason
+
+    if not conv_id:
+        return _fail("no group conversation mapped — run detect_worker_conversations() to fix")
+
     ok, result = ct_post(
-        f"/chat/v1/conversations/privateMessage/{user_id}",
+        f"/chat/v1/conversations/{conv_id}/message",
         {"senderId": CONNECTEAM_SENDER_ID, "text": text[:4000]},
     )
     if not ok:
-        return False, result
+        return _fail(f"group conv {conv_id} returned error: {result}")
+
     msg_id = (result.get("data") or {}).get("messageId") or result.get("messageId")
-
-    label   = worker_name or f"User {user_id}"
-    cc_text = f"CC — sent to {label}:\n\n{text[:900]}"
-    for oid in COMPLIANCE_OBSERVER_IDS:
-        if str(oid) != str(user_id):
-            ct_post(
-                f"/chat/v1/conversations/privateMessage/{oid}",
-                {"senderId": CONNECTEAM_SENDER_ID, "text": cc_text},
-            )
-
     return True, msg_id
 
 
