@@ -36,6 +36,7 @@ TWILIO_FROM_NUMBER    = os.environ.get("TWILIO_NUMBER", "")
 TWILIO_WA_NUMBER      = os.environ.get("TWILIO_WHATSAPP_NUMBER", TWILIO_FROM_NUMBER)
 CONNECTEAM_SENDER_ID      = int(os.environ.get("CONNECTEAM_SENDER_ID", "0") or "0")
 COMPLIANCE_INDICATOR_ID   = int(os.environ.get("COMPLIANCE_INDICATOR_ID", "0") or "0")
+CC_MGMT_CONV_ID           = os.environ.get("CC_MGMT_CONV_ID", "")
 
 BASE_URL       = "https://api.connecteam.com"
 TIME_CLOCK_ID  = 1776332
@@ -814,15 +815,21 @@ def send_worker_message(user_id, text, worker_name=None):
     if not conv_id:
         return _fail("no group conversation mapped — run detect_worker_conversations() to fix")
 
-    ok, result = ct_post(
-        f"/chat/v1/conversations/{conv_id}/message",
-        {"senderId": CONNECTEAM_SENDER_ID, "text": text[:4000]},
-    )
-    if not ok:
-        return _fail(f"group conv {conv_id} returned error: {result}")
+    # Split into 950-char chunks to stay under Connecteam's 1000-char limit
+    MAX_CHUNK = 950
+    chunks = [text[i:i + MAX_CHUNK] for i in range(0, len(text), MAX_CHUNK)] if len(text) > MAX_CHUNK else [text]
 
-    msg_id = (result.get("data") or {}).get("messageId") or result.get("messageId")
-    return True, msg_id
+    last_msg_id = None
+    for chunk in chunks:
+        ok, result = ct_post(
+            f"/chat/v1/conversations/{conv_id}/message",
+            {"senderId": CONNECTEAM_SENDER_ID, "text": chunk},
+        )
+        if not ok:
+            return _fail(f"group conv {conv_id} returned error: {result}")
+        last_msg_id = (result.get("data") or {}).get("messageId") or result.get("messageId")
+
+    return True, last_msg_id
 
 
 def add_worker_profile_note(user_id, text, title="Compliance Notification"):
