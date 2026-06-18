@@ -268,17 +268,20 @@ def post_to_management(text: str):
     if not sender_id or not CONNECTEAM_API_KEY:
         print(f"  [DRY RUN] CC Management: {text[:120]}")
         return
-    try:
-        r = requests.post(
-            f"{BASE_URL}/chat/v1/conversations/{CC_MGMT_CONV_ID}/message",
-            headers={"X-API-KEY": CONNECTEAM_API_KEY, "Content-Type": "application/json"},
-            json={"senderId": sender_id, "text": text[:4000]},
-            timeout=15,
-        )
-        if not r.ok:
-            print(f"  [WARNING] CC Management post failed: {r.status_code}")
-    except Exception as e:
-        print(f"  [ERROR] CC Management post: {e}")
+    MAX_CHUNK = 950
+    chunks = [text[i:i + MAX_CHUNK] for i in range(0, len(text), MAX_CHUNK)] if len(text) > MAX_CHUNK else [text]
+    for chunk in chunks:
+        try:
+            r = requests.post(
+                f"{BASE_URL}/chat/v1/conversations/{CC_MGMT_CONV_ID}/message",
+                headers={"X-API-KEY": CONNECTEAM_API_KEY, "Content-Type": "application/json"},
+                json={"senderId": sender_id, "text": chunk},
+                timeout=15,
+            )
+            if not r.ok:
+                print(f"  [WARNING] CC Management post failed: {r.status_code}")
+        except Exception as e:
+            print(f"  [ERROR] CC Management post: {e}")
 
 
 # ── Credential message ────────────────────────────────────────────────────────
