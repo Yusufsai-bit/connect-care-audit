@@ -2292,6 +2292,39 @@ async def debug():
     return JSONResponse(_EVENT_LOG)
 
 
+@app.get("/test-invoice/{worker_name}")
+async def test_invoice(worker_name: str):
+    """
+    Trigger an invoice audit manually by worker name — use to test the code
+    path without needing a real Connecteam webhook event.
+    e.g. GET /test-invoice/Peter
+    """
+    if not CONNECTEAM_API_KEY:
+        return JSONResponse({"error": "CONNECTEAM_API_KEY not set"}, status_code=500)
+    try:
+        from connecteam_audit import fetch_all_users as _fetch_users
+        users = _fetch_users()
+        name_lower = worker_name.lower()
+        matched_name, matched_id, best_len = None, None, 0
+        for uid, u in users.items():
+            full  = f"{u.get('firstName','')} {u.get('lastName','')}".strip()
+            first = u.get("firstName", "").strip()
+            for candidate in [full, first]:
+                if candidate and candidate.lower() == name_lower and len(candidate) > best_len:
+                    matched_name, matched_id, best_len = full, uid, len(candidate)
+        if not matched_name:
+            return JSONResponse({"error": f"No worker found matching '{worker_name}'"}, status_code=404)
+        threading.Thread(
+            target=_run_invoice_audit,
+            args=(matched_name, str(matched_id)),
+            daemon=True,
+        ).start()
+        start_dt, end_dt, label = _get_invoice_pay_period()
+        return JSONResponse({"status": "started", "worker": matched_name, "period": label})
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 if os.environ.get("DEBUG", "").lower() == "true":
     @app.post("/webhook/debug")
     async def debug_webhook(request: Request):
