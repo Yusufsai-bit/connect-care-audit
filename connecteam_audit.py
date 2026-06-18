@@ -2201,19 +2201,24 @@ def run_audit(days_back=7, start_override=None, end_override=None, worker_id_fil
         counts[iss.severity] += 1
 
     # When scoped to one worker, drop issues belonging to other workers.
-    # For team-level issues (worker="(team)"), only keep them if the client
-    # is one that this worker actually has shifts for — prevents form
-    # frequency issues for unrelated clients leaking into the audit.
+    # For team-level issues (worker="(team)"), use client_shift_days (already
+    # scoped to this worker's activities) to decide which clients belong to them.
     if worker_id_filter:
         worker_name_filter = uname(worker_id_filter)
-        worker_clients = {
-            i.client for i in sorted_issues
-            if i.worker == worker_name_filter and i.client
-        }
+        # client_shift_days keys are Connecteam job titles (e.g. "Kallan Jordan").
+        # Match by first name so "Kallan Jordan" in shifts covers "Kallan Jordan" in issues.
+        worker_job_titles = {t.lower() for t in client_shift_days}
+
+        def _client_is_workers(client_name):
+            if not client_name:
+                return True  # no client = team-wide, always include
+            first = client_name.split()[0].lower()
+            return any(first in title for title in worker_job_titles)
+
         sorted_issues = [
             i for i in sorted_issues
             if i.worker == worker_name_filter
-            or (i.worker in {"(team)", "unknown", ""} and (not i.client or i.client in worker_clients))
+            or (i.worker in {"(team)", "unknown", ""} and _client_is_workers(i.client))
         ]
 
     print("\n" + "=" * 72)
