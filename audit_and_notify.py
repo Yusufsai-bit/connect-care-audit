@@ -47,6 +47,9 @@ CRED_CATEGORIES         = {"EXPIRED CREDENTIAL", "CREDENTIAL EXPIRING SOON"}
 CRED_DEDUP_DAYS_EXPIRED = 1   # re-notify daily for expired credentials
 CRED_DEDUP_DAYS_SOON    = 7   # re-notify weekly for expiring-soon credentials
 
+PENDING_CATEGORIES      = {"PENDING AMENDMENT -- WORKER NOTICE", "PENDING AMENDMENT -- REVIEW REQUIRED"}
+PENDING_DEDUP_DAYS      = 7   # only re-notify about the same pending amendment once a week
+
 # Rostering/management issues — go to CC Management only, never to the individual worker
 MANAGEMENT_ONLY_CATEGORIES = {
     "UNDERSTAFFED -- RATIO BREACH",
@@ -793,10 +796,18 @@ def main():
         )
     }
 
+    # Pending amendment dedup — 7-day window so worker/management aren't re-notified
+    # every 2 days while an amendment sits waiting for approval
+    cutoff_pending = (now - datetime.timedelta(days=PENDING_DEDUP_DAYS)).strftime("%Y-%m-%d")
+    recent_pending_fps = {
+        fp for fp, v in notified.items()
+        if v.get("pending") and v.get("date", "") >= cutoff_pending
+    }
+
     for iss in issues:
         if iss.severity not in NOTIFY_SEVERITIES and not (
             iss.severity == "MEDIUM" and iss.category in (
-                CRED_CATEGORIES | {"UNSCHEDULED SHIFT", "PENDING AMENDMENT -- WORKER NOTICE", "PENDING AMENDMENT -- REVIEW REQUIRED"}
+                CRED_CATEGORIES | {"UNSCHEDULED SHIFT"} | PENDING_CATEGORIES
             )
         ):
             continue
@@ -810,7 +821,10 @@ def main():
                 cred_new_issues[iss.worker].append(iss)
             continue  # credentials handled separately below
 
-        if fp in notified:
+        if iss.category in PENDING_CATEGORIES:
+            if fp in recent_pending_fps:
+                continue  # already notified within last 7 days
+        elif fp in notified:
             continue  # already messaged
 
         if iss.category in MANAGEMENT_ONLY_CATEGORIES or iss.worker.lower() in TEAM_NAMES:
@@ -836,8 +850,17 @@ def main():
             print(f"  [SKIP] {worker_name} — no user ID found in Connecteam")
             continue
 
-        strike_counts = {iss.category: _get_strike_count(worker_name, iss.category, notified) for iss in worker_issues}
-        max_strike    = max(strike_counts.values()) if strike_counts else 0
+        # Pending amendment notices are not compliance failures — exclude from strike count
+        # so they never trigger a sterner tone
+        strike_counts = {
+            iss.category: (0 if iss.category in PENDING_CATEGORIES
+                           else _get_strike_count(worker_name, iss.category, notified))
+            for iss in worker_issues
+        }
+        max_strike = max(
+            (v for cat, v in strike_counts.items() if cat not in PENDING_CATEGORIES),
+            default=0
+        )
         history       = convo_log.get(str(uid), [])
         if isinstance(history, dict):
             history = history.get("messages", [])
@@ -864,6 +887,7 @@ def main():
                         "date": now.strftime("%Y-%m-%d"), "worker": worker_name,
                         "sent_ts": int(now.timestamp()), "acknowledged": False,
                         "category": iss.category, "client": iss.client or "",
+                        "pending": iss.category in PENDING_CATEGORIES,
                     }
                 # Repeat offender alert to CC Management (3rd+ strike)
                 repeat_cats = [cat for cat, count in strike_counts.items() if count >= 2]
@@ -948,14 +972,22 @@ def main():
 
     if team_new_issues:
         summary_lines.append(f"\nTeam issues (not sent to workers):")
-        by_client = defaultdict(list)
-        for iss in team_new_issues:
-            by_client[iss.client or "N/A"].append(iss.category)
-        for client, cats in by_client.items():
-            summary_lines.append(f"- {client}: {', '.join(cats)}")
+        # Pending amendments get their full detail shown (worker name + date) so they're actionable
+        pending_alerts = [i for i in team_new_issues if i.category == "PENDING AMENDMENT -- REVIEW REQUIRED"]
+        other_issues   = [i for i in team_new_issues if i.category != "PENDING AMENDMENT -- REVIEW REQUIRED"]
+        if pending_alerts:
+            summary_lines.append("Pending amendments — action required in Connecteam:")
+            for iss in pending_alerts:
+                summary_lines.append(f"  ⏳ {iss.detail}")
+        if other_issues:
+            by_client = defaultdict(list)
+            for iss in other_issues:
+                by_client[iss.client or "N/A"].append(iss.category)
+            for client, cats in by_client.items():
+                summary_lines.append(f"- {client}: {', '.join(cats)}")
         for iss in team_new_issues:
             fp = issue_fingerprint(iss)
-            notified[fp] = {"date": now.strftime("%Y-%m-%d"), "worker": "(team)", "category": iss.category, "client": iss.client or ""}
+            notified[fp] = {"date": now.strftime("%Y-%m-%d"), "worker": iss.worker, "category": iss.category, "client": iss.client or "", "pending": iss.category in PENDING_CATEGORIES}
 
     has_issues = bool(sent_ok or sent_err or team_new_issues or cred_sent)
 
