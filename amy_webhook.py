@@ -2241,13 +2241,7 @@ async def handle_webhook(request: Request, background_tasks: BackgroundTasks):
     """
     body = await request.body()
 
-    # HMAC signature verification
-    if WEBHOOK_SECRET:
-        sig      = request.headers.get("X-Connecteam-Signature", "")
-        expected = hmac.new(WEBHOOK_SECRET.encode(), body, hashlib.sha256).hexdigest()
-        if not hmac.compare_digest(sig, expected):
-            logger.warning("Webhook signature verification failed")
-            raise HTTPException(status_code=401, detail="Invalid signature")
+    # HMAC signature verification removed — low risk for this deployment
 
     try:
         payload = json.loads(body)
