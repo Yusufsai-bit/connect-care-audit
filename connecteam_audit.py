@@ -225,6 +225,29 @@ def fetch_time_activities(start_date, end_date):
     return by_user
 
 
+def fetch_pending_shift_ids(start_date, end_date):
+    """Return a set of shift IDs that have pending amendment requests.
+    These shifts must not be flagged for missing/empty notes — the worker
+    may have submitted notes in the amendment that the API can't yet return.
+    """
+    try:
+        data = ct_get(
+            f"/time-clock/v1/time-clocks/{TIME_CLOCK_ID}/time-activities",
+            {"startDate": start_date, "endDate": end_date, "approvalStatus": "pending"},
+        )
+        pending_ids = set()
+        for entry in data["data"]["timeActivitiesByUsers"]:
+            for shift in entry["shifts"]:
+                sid = shift.get("id")
+                if sid:
+                    pending_ids.add(str(sid))
+        print(f"[pending amendments] {len(pending_ids)} shift(s) with pending edits — notes check skipped for these.")
+        return pending_ids
+    except Exception as e:
+        print(f"[pending amendments] fetch failed ({e}) — no shifts will be skipped.")
+        return set()
+
+
 _FORM_SUBS_CACHE: dict = {}  # pre-populated at start of run_audit
 
 def fetch_form_submissions(form_id):
@@ -1088,6 +1111,7 @@ def run_audit(days_back=7):
         _f_jobs    = _pool.submit(fetch_all_jobs)
         _f_shifts  = _pool.submit(fetch_scheduled_shifts, start_ts, end_ts)
         _f_acts    = _pool.submit(fetch_time_activities, start_date, end_date)
+        _f_pending = _pool.submit(fetch_pending_shift_ids, start_date, end_date)
         _f_geo     = _pool.submit(fetch_geofences)
         _f_breaks  = _pool.submit(fetch_manual_breaks, start_date, end_date)
         _f_unavail = _pool.submit(fetch_user_unavailabilities, start_ts, end_ts)
@@ -1100,6 +1124,7 @@ def run_audit(days_back=7):
         jobs               = _f_jobs.result()
         scheduled_shifts   = _f_shifts.result()
         activities_by_user = _f_acts.result()
+        pending_shift_ids  = _f_pending.result()
         geofences          = _f_geo.result()
         breaks_by_activity = _f_breaks.result()
         unavailabilities   = _f_unavail.result()
@@ -1440,6 +1465,12 @@ def run_audit(days_back=7):
                     "Required participant/client signature not completed."))
 
             note_text = get_note_text(attachments)
+
+            # Worker has a pending amendment for this shift — their updated notes
+            # are sitting in the approval queue and the API returns the original
+            # (empty) record. Skip all note-quality flags until the edit is approved.
+            if str(act_id) in pending_shift_ids:
+                continue
 
             if not attachments:
                 issues.append(Issue("HIGH", "NO SHIFT NOTES", name, client, dlabel,
