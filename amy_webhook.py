@@ -1867,18 +1867,21 @@ def _run_invoice_audit(worker_name: str, worker_id: str):
 
     lines = [f"⚠️ {first}'s invoice ({period_label}) — {len(actionable)} issue(s) to resolve before processing:"]
 
+    NOTE_CATS = {"NO SHIFT NOTES", "SHORT NOTES", "COPY-PASTE NOTES", "BACKDATED NOTES", "AI NOTE QUALITY", "MISSING SIGNATURE"}
+
     if missing:
-        by_client = defaultdict(lambda: defaultdict(list))
+        # Group by client → form → dates (one line per form, all dates listed)
+        by_client_form = defaultdict(lambda: defaultdict(list))
         for iss in missing:
             client = iss.client or "Unknown"
             form = iss.detail.split(" not submitted")[0].strip()
-            by_client[client][iss.date].append(form)
+            by_client_form[client][form].append(iss.date)
         lines.append("")
-        for client in sorted(by_client):
+        for client in sorted(by_client_form):
             lines.append(f"Missing forms — {client}:")
-            for date in sorted(by_client[client]):
-                forms = sorted(set(by_client[client][date]))
-                lines.append(f"  • {date}: {', '.join(forms)}")
+            for form in sorted(by_client_form[client]):
+                dates = sorted(set(by_client_form[client][form]))
+                lines.append(f"  • {form}: {', '.join(dates)}")
 
     if freq:
         lines.append("")
@@ -1886,10 +1889,20 @@ def _run_invoice_audit(worker_name: str, worker_id: str):
         for iss in freq:
             lines.append(f"  • {iss.client or iss.category}: {iss.detail}")
 
-    if other:
+    note_issues = [i for i in other if i.category in NOTE_CATS]
+    rest        = [i for i in other if i.category not in NOTE_CATS]
+
+    if note_issues:
         lines.append("")
-        for iss in other:
-            lines.append(f"{iss.category} — {iss.client or 'N/A'} ({iss.date}): {iss.detail}")
+        lines.append("Shift note issues:")
+        for iss in note_issues:
+            lines.append(f"  • {iss.date} ({iss.client or 'N/A'}): {iss.detail}")
+
+    if rest:
+        lines.append("")
+        lines.append("Other issues:")
+        for iss in rest:
+            lines.append(f"  • {iss.category} — {iss.client or 'N/A'} ({iss.date}): {iss.detail}")
 
     lines.append("")
     lines.append("Do not approve until all resolved.")
