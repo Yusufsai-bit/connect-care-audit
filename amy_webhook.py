@@ -136,6 +136,9 @@ _SCHEDULED_LOCK = threading.Lock()
 _EVENT_LOG: list = []
 _EVENT_LOG_LOCK = threading.Lock()
 
+# Last invoice audit result — so Amy can answer follow-up questions about it
+_LAST_INVOICE_CONTEXT: dict = {}   # {worker, period, issues_summary, raw_issues}
+
 app = FastAPI()
 
 # ── GitHub / disk persistence helpers ─────────────────────────────────────────
@@ -301,14 +304,36 @@ def get_conversation_history(user_id, n=8):
 
 
 def append_to_conversation(user_id, role, text):
-    """Append a turn to this worker's conversation history (cap at 20 entries)."""
+    """Append a turn to conversation history (cap at 40 entries, 7-day TTL).
+    Use user_id='cc_mgmt' for CC Management channel messages.
+    """
     memory = _gh_load("amy_conversation_log.json", {})
     hist = memory.get(str(user_id), [])
     if isinstance(hist, str):
         hist = [{"role": "amy", "text": hist, "ts": ""}] if hist else []
-    hist.append({"role": role, "text": text[:500], "ts": datetime.datetime.now(AEST).strftime("%d %b %H:%M")})
-    memory[str(user_id)] = hist[-20:]
+    now_ts = int(time.time())
+    cutoff = now_ts - CONVO_EXPIRY_DAYS * 86400
+    hist = [h for h in hist if h.get("ts_unix", now_ts) >= cutoff]
+    hist.append({
+        "role":    role,
+        "text":    text[:800],
+        "ts":      datetime.datetime.now(AEST).strftime("%d %b %H:%M"),
+        "ts_unix": now_ts,
+    })
+    memory[str(user_id)] = hist[-40:]
     _gh_save("amy_conversation_log.json", memory)
+
+
+def get_cc_mgmt_history(n=12):
+    """Return last n turns from the CC Management conversation."""
+    memory = _gh_load("amy_conversation_log.json", {})
+    hist = memory.get("cc_mgmt", [])
+    return hist[-n:]
+
+
+def log_cc_mgmt(role: str, text: str):
+    """Persist a CC Management message (role = 'amy' or 'manager') to GitHub."""
+    append_to_conversation("cc_mgmt", role, text[:1500])
 
 
 # ── Worker profiles ────────────────────────────────────────────────────────────
@@ -1681,14 +1706,38 @@ def _handle_manager_instruction(instruction):
     if not ANTHROPIC_API_KEY:
         alert_cc_management("Got it — but AI key isn't set so I can't act on instructions right now.")
         return
-    prompt = f"""You are Amy, a support coordinator at Connect Care. Your manager just sent you this instruction in a team chat:
+
+    # Load persistent CC Management conversation history
+    cc_hist = get_cc_mgmt_history(n=12)
+    history_block = ""
+    if cc_hist:
+        turns = []
+        for turn in cc_hist:
+            speaker = "Amy" if turn.get("role") == "amy" else "Manager"
+            turns.append(f"{speaker} [{turn.get('ts','')}]: {turn.get('text','')}")
+        history_block = "\n".join(turns)
+    history_section = f"\nRecent conversation:\n{history_block}\n" if history_block else ""
+
+    # Inject recent invoice audit context (capped at 1500 chars to keep prompt tight)
+    invoice_ctx = ""
+    if _LAST_INVOICE_CONTEXT:
+        invoice_ctx = (
+            f"\nMost recent invoice audit —"
+            f" Worker: {_LAST_INVOICE_CONTEXT.get('worker')},"
+            f" Period: {_LAST_INVOICE_CONTEXT.get('period')},"
+            f" Issues ({_LAST_INVOICE_CONTEXT.get('issue_count')}):\n"
+            f"{_LAST_INVOICE_CONTEXT.get('issues_summary', '')[:1200]}\n"
+        )
+
+    prompt = f"""You are Amy, a support coordinator at Connect Care. Your manager just sent you this message:
 
 "{instruction}"
-
+{history_section}{invoice_ctx}
 Decide what to do:
-1. If they want you to message a specific worker: output JSON {{"action": "message_worker", "worker_name": "<first name or full name>", "message": "<what to say to the worker in your natural voice>"}}
-2. If they want you to do something you can't do (e.g. check a roster, approve something): output JSON {{"action": "cant_do", "reply": "<short reply acknowledging and explaining what you can't do>"}}
-3. If unclear or general: output JSON {{"action": "confirm", "reply": "<short confirmation or clarifying question>"}}
+1. If they are asking about the recent invoice audit or anything in the conversation above: {{"action": "confirm", "reply": "<answer directly using the context — be specific, don't ask for clarification>"}}
+2. If they want you to message a specific worker: {{"action": "message_worker", "worker_name": "<name>", "message": "<message in your natural voice>"}}
+3. If you can't do what they're asking: {{"action": "cant_do", "reply": "<short explanation>"}}
+4. General/unclear: {{"action": "confirm", "reply": "<short natural reply>"}}
 
 JSON only."""
     raw = _call_claude(prompt, max_tokens=300)
@@ -1718,13 +1767,18 @@ JSON only."""
         sent = _worker_send(worker_id, msg_to_send)
         if sent:
             append_to_conversation(worker_id, "amy", msg_to_send)
-            alert_cc_management(f"Done — sent {worker_name}: \"{msg_to_send[:120]}\"")
+            reply_text = f"Done — sent {worker_name}: \"{msg_to_send[:120]}\""
+            alert_cc_management(reply_text)
+            log_cc_mgmt("amy", reply_text)
         else:
-            alert_cc_management(f"Tried to message {worker_name} but it didn't go through — might be quiet hours or a chat issue.")
+            reply_text = f"Tried to message {worker_name} but it didn't go through — might be quiet hours or a chat issue."
+            alert_cc_management(reply_text)
+            log_cc_mgmt("amy", reply_text)
     elif action in ("cant_do", "confirm"):
         reply = result.get("reply", "")
         if reply:
             alert_cc_management(reply)
+            log_cc_mgmt("amy", reply)
 
 
 def _get_invoice_pay_period():
@@ -1794,9 +1848,15 @@ def _run_invoice_audit(worker_name: str, worker_id: str):
 
     first = worker_name.split()[0]
     if not actionable:
-        alert_cc_management(
-            f"✅ {first}'s invoice for {period_label} is clear — no compliance issues found. Safe to process."
-        )
+        clear_msg = f"✅ {first}'s invoice for {period_label} is clear — no compliance issues found. Safe to process."
+        alert_cc_management(clear_msg)
+        log_cc_mgmt("amy", clear_msg)
+        update_worker_profile(str(worker_id), {
+            "last_invoice_audit": datetime.datetime.now(AEST).strftime("%d %b %Y"),
+            "last_invoice_period": period_label,
+            "last_invoice_status": "clear",
+            "last_invoice_issue_count": 0,
+        })
         return
 
     # Group by severity for a clean summary
@@ -1816,6 +1876,31 @@ def _run_invoice_audit(worker_name: str, worker_id: str):
     chunk_size = 950
     for i in range(0, len(full_msg), chunk_size):
         alert_cc_management(full_msg[i:i + chunk_size])
+
+    issues_summary = "\n".join(
+        f"- [{iss.severity}] {iss.category} | {iss.client or 'N/A'} | {iss.date}: {iss.detail}"
+        for iss in actionable
+    )
+
+    # Store context so Amy can answer follow-up questions (in-memory + persistent)
+    global _LAST_INVOICE_CONTEXT
+    _LAST_INVOICE_CONTEXT = {
+        "worker":        worker_name,
+        "period":        period_label,
+        "issue_count":   len(actionable),
+        "issues_summary": issues_summary,
+    }
+    # Log the audit result to CC Management history (capped at 1500 chars)
+    log_cc_mgmt("amy", full_msg[:1500])
+
+    # Update worker profile with invoice audit summary
+    update_worker_profile(str(worker_id), {
+        "last_invoice_audit":       datetime.datetime.now(AEST).strftime("%d %b %Y"),
+        "last_invoice_period":      period_label,
+        "last_invoice_status":      "issues",
+        "last_invoice_issue_count": len(actionable),
+        "last_invoice_categories":  list({iss.category for iss in actionable}),
+    })
 
 
 def handle_chat_reply(data):
@@ -1844,6 +1929,9 @@ def handle_chat_reply(data):
     # ── Manager in CC Management → handle instruction or relay response ──────
     if conv_id == CC_MGMT_CONV_ID and uid in OBSERVER_IDS:
         text_lower = text.lower()
+
+        # Log every manager message in CC Management for persistent context
+        log_cc_mgmt("manager", text)
 
         # Invoice audit trigger — "[name] sent their invoice" etc.
         if CONNECTEAM_API_KEY:
@@ -2276,14 +2364,18 @@ async def health():
 
 @app.get("/status")
 async def status():
+    cc_hist = get_cc_mgmt_history(n=100)
     return {
-        "sender_id":       SENDER_ID,
-        "amy_ids":         list(AMY_SENDER_IDS),
-        "ct_key_set":      bool(CONNECTEAM_API_KEY),
-        "ai_key_set":      bool(ANTHROPIC_API_KEY),
-        "webhook_secret":  bool(WEBHOOK_SECRET),
-        "relay_queue":     len(PENDING_RELAY_QUEUE),
-        "uptime":          datetime.datetime.now(AEST).isoformat(),
+        "sender_id":          SENDER_ID,
+        "amy_ids":            list(AMY_SENDER_IDS),
+        "ct_key_set":         bool(CONNECTEAM_API_KEY),
+        "ai_key_set":         bool(ANTHROPIC_API_KEY),
+        "webhook_secret":     bool(WEBHOOK_SECRET),
+        "relay_queue":        len(PENDING_RELAY_QUEUE),
+        "cc_mgmt_turns":      len(cc_hist),
+        "last_invoice_worker": _LAST_INVOICE_CONTEXT.get("worker"),
+        "last_invoice_period": _LAST_INVOICE_CONTEXT.get("period"),
+        "uptime":             datetime.datetime.now(AEST).isoformat(),
     }
 
 
