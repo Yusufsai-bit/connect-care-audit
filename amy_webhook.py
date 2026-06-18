@@ -1867,7 +1867,15 @@ def _run_invoice_audit(worker_name: str, worker_id: str):
 
     lines = [f"⚠️ {first}'s invoice ({period_label}) — {len(actionable)} issue(s) to resolve before processing:"]
 
-    NOTE_CATS = {"NO SHIFT NOTES", "SHORT NOTES", "COPY-PASTE NOTES", "BACKDATED NOTES", "AI NOTE QUALITY", "MISSING SIGNATURE"}
+    NOTE_CATS = {
+        "NO SHIFT NOTES", "SHORT NOTES", "COPY-PASTE NOTES", "BACKDATED NOTES",
+        "AI NOTE QUALITY", "MISSING SIGNATURE",
+        "FAILS NDIS STANDARD", "POSSIBLE AI-GENERATED NOTE", "NOT PLAIN ENGLISH",
+        "NOTE DOESN'T MAKE SENSE", "SUBJECTIVE LANGUAGE", "NOT PERSON-CENTRED", "NO PLAN GOAL REFERENCE",
+        "INCIDENT REPORT — FAILS NDIS STANDARD", "INCIDENT REPORT — INSUFFICIENT DETAIL",
+        "INCIDENT REPORT — SUBJECTIVE LANGUAGE", "INCIDENT REPORT — MISSING WORKER RESPONSE",
+        "INCIDENT REPORT — MISSING PARTICIPANT CONDITION",
+    }
 
     if missing:
         # Group by client → form → dates (one line per form, all dates listed)
@@ -1894,7 +1902,7 @@ def _run_invoice_audit(worker_name: str, worker_id: str):
 
     if note_issues:
         lines.append("")
-        lines.append("Shift note issues:")
+        lines.append("Note & incident report quality issues:")
         for iss in note_issues:
             lines.append(f"  • {iss.date} ({iss.client or 'N/A'}): {iss.detail}")
 
