@@ -1828,9 +1828,11 @@ def handle_chat_reply(data):
          - Complex → Amy holds, asks CC Management "what should I tell [worker]?"
     """
     global PENDING_RELAY_QUEUE
-    user_id = data.get("userId") or data.get("senderId")
-    text    = (data.get("text") or data.get("content") or "").strip()
-    conv_id = str(data.get("conversationId") or data.get("channelId") or "")
+    user_id = data.get("userId") or data.get("senderId") or data.get("authorId")
+    text    = (data.get("text") or data.get("content") or data.get("messageText")
+               or data.get("body") or data.get("message") or "").strip()
+    conv_id = str(data.get("conversationId") or data.get("channelId") or data.get("chatId") or "")
+    logger.info(f"[chat] raw fields — keys={list(data.keys())} userId={user_id!r} conv={conv_id!r} text={text[:60]!r}")
     if not user_id or not text:
         logger.info(f"[chat] skipped — userId={user_id!r} text={text[:40]!r}")
         return
@@ -2160,11 +2162,13 @@ def _run_5pm_deadline_check():
 
 def _log_event(event, data, raw_body=None):
     """Store a snapshot in the ring buffer; cap at 30 entries."""
+    # For chat events, unwrap the nested message so fields are visible in debug
+    display_data = data.get("message", data) if isinstance(data, dict) and "message" in data else data
     entry = {
         "ts":    datetime.datetime.now(AEST).strftime("%d %b %Y %I:%M:%S %p"),
         "event": event,
-        "keys":  list(data.keys()) if isinstance(data, dict) else [],
-        "data":  {k: str(v)[:200] for k, v in (data.items() if isinstance(data, dict) else {})},
+        "keys":  list(display_data.keys()) if isinstance(display_data, dict) else [],
+        "data":  {k: str(v)[:300] for k, v in (display_data.items() if isinstance(display_data, dict) else {})},
     }
     with _EVENT_LOG_LOCK:
         _EVENT_LOG.insert(0, entry)
@@ -2205,7 +2209,9 @@ def _process_event(payload):
         handle_admin_time_edit(data)
     elif event in ("chatMessageCreated", "Chat message created") or el in (
             "chat_message_created", "message_created", "chatmessagecreated"):
-        handle_chat_reply(data)
+        # Connecteam nests the message fields under a "message" key
+        chat_data = data.get("message", data)
+        handle_chat_reply(chat_data)
     elif event in ("formSubmission", "Form Submission") or el == "form_submission":
         handle_form_submitted(data)
     elif "shift" in el:
