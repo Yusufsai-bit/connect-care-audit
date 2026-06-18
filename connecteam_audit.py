@@ -1459,18 +1459,22 @@ def run_audit(days_back=7):
             if not clock_out and (now.timestamp() - clock_in) / 3600 <= 8.5:
                 continue
 
+            # Worker has a pending amendment — the API returns the original record,
+            # not the edited version. Skip ALL note/signature checks for this shift
+            # and alert management so the amendment isn't silently ignored.
+            if str(act_id) in pending_shift_ids:
+                issues.append(Issue("MEDIUM", "PENDING AMENDMENT -- REVIEW REQUIRED",
+                    name, client, dlabel,
+                    "Worker has submitted a shift amendment pending approval. "
+                    "Review and approve or reject it in Connecteam before the next audit."))
+                continue
+
             # Missing signature
             if attachments and not has_signature(attachments):
                 issues.append(Issue("MEDIUM", "MISSING SIGNATURE", name, client, dlabel,
                     "Required participant/client signature not completed."))
 
             note_text = get_note_text(attachments)
-
-            # Worker has a pending amendment for this shift — their updated notes
-            # are sitting in the approval queue and the API returns the original
-            # (empty) record. Skip all note-quality flags until the edit is approved.
-            if str(act_id) in pending_shift_ids:
-                continue
 
             if not attachments:
                 issues.append(Issue("HIGH", "NO SHIFT NOTES", name, client, dlabel,
