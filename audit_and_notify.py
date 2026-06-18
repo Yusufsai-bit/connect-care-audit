@@ -268,9 +268,22 @@ def post_to_management(text: str):
     if not sender_id or not CONNECTEAM_API_KEY:
         print(f"  [DRY RUN] CC Management: {text[:120]}")
         return
-    MAX_CHUNK = 950
-    chunks = [text[i:i + MAX_CHUNK] for i in range(0, len(text), MAX_CHUNK)] if len(text) > MAX_CHUNK else [text]
-    for chunk in chunks:
+    def _split_at_lines(t, max_chars=950):
+        if len(t) <= max_chars:
+            return [t]
+        chunks, current = [], ""
+        for line in t.split("\n"):
+            candidate = (current + "\n" + line).lstrip("\n")
+            if len(candidate) > max_chars:
+                if current:
+                    chunks.append(current)
+                current = line
+            else:
+                current = candidate
+        if current:
+            chunks.append(current)
+        return chunks
+    for chunk in _split_at_lines(text):
         try:
             r = requests.post(
                 f"{BASE_URL}/chat/v1/conversations/{CC_MGMT_CONV_ID}/message",
