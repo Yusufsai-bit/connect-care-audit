@@ -1469,12 +1469,16 @@ def run_audit(days_back=7):
 
             # Worker has a pending amendment — the API returns the original record,
             # not the edited version, so note content cannot be assessed yet.
-            # Skip note-quality flags and alert management to review the amendment.
+            # Notify the worker their amendment was received, alert management to action it.
             if str(act_id) in pending_shift_ids:
+                issues.append(Issue("MEDIUM", "PENDING AMENDMENT -- WORKER NOTICE",
+                    name, client, dlabel,
+                    "Worker submitted a shift amendment that is awaiting approval. "
+                    "Let them know their notes have been received and are pending review — no further action needed from them."))
                 issues.append(Issue("MEDIUM", "PENDING AMENDMENT -- REVIEW REQUIRED",
                     name, client, dlabel,
-                    "Worker has submitted a shift amendment pending approval. "
-                    "Review and approve or reject it in Connecteam before the next audit."))
+                    f"{name} has a shift amendment pending approval for {client} on {dlabel}. "
+                    "Please review and approve or reject it in Connecteam before the next audit."))
                 continue
 
             if not attachments:
