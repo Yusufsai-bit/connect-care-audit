@@ -1088,6 +1088,79 @@ Return ONLY a valid JSON array. No explanation, no markdown."""
         return {}
 
 
+def assess_incident_reports_with_claude(reports_batch):
+    """
+    Evaluate a batch of incident report descriptions against NDIS standards.
+    Returns dict keyed by report id.
+    """
+    if not ANTHROPIC_API_KEY or not reports_batch:
+        return {}
+
+    try:
+        import anthropic
+        ai_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    except ImportError:
+        print("  [WARNING] anthropic package not found -- skipping AI incident report assessment.")
+        return {}
+
+    def _pseudo(name):
+        return f"Client {name[0].upper()}" if name else "Client"
+
+    payload = json.dumps([
+        {
+            "id":     r["id"],
+            "worker": r["worker"].split()[0] if r.get("worker") else "Worker",
+            "client": _pseudo(r["client"]),
+            "date":   r["date"],
+            "text":   r["text"][:2000],
+        }
+        for r in reports_batch
+    ], indent=2)
+
+    prompt = f"""You are a senior NDIS compliance auditor reviewing incident report descriptions written by support workers.
+
+Evaluate each description against the NDIS Incident Management and Reportable Incidents Rules 2018.
+
+A compliant incident report description must:
+- Describe what happened factually and objectively (no opinions)
+- Include enough detail to reconstruct the event (who, what, when, where)
+- Describe the participant's condition or behaviour before and after
+- Describe the support worker's response and actions taken
+- Use clear, plain English
+
+Incident report descriptions to evaluate:
+{payload}
+
+For EACH description return a JSON object with:
+- id: (same as input)
+- passes_ndis_standard: true/false
+- has_sufficient_detail: true/false
+- is_factual_and_objective: true/false
+- describes_worker_response: true/false
+- describes_participant_condition: true/false
+- is_plain_english: true/false
+- issues: [list of specific problems — empty if none]
+- severity: "PASS", "LOW", "MEDIUM", or "HIGH"
+
+Return ONLY a valid JSON array. No explanation, no markdown."""
+
+    try:
+        response = ai_client.messages.create(
+            model="claude-haiku-4-5",
+            max_tokens=4096,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = response.content[0].text.strip()
+        if raw.startswith("```"):
+            raw = raw.split("\n", 1)[1] if "\n" in raw else raw
+            raw = raw.rsplit("```", 1)[0].strip()
+        results = json.loads(raw)
+        return {r["id"]: r for r in results}
+    except Exception as e:
+        print(f"  [WARNING] Claude incident report assessment failed: {e}")
+        return {}
+
+
 # ---------------------------------------------
 # MAIN AUDIT
 # ---------------------------------------------
@@ -1697,6 +1770,7 @@ def run_audit(days_back=7, start_override=None, end_override=None, worker_id_fil
         "Safety Hazard Report":   FORMS["Safety Hazard Report"],
         "Medication Incident Form": FORMS["Medication Incident Form"],
     }
+    incident_reports_for_claude = []  # collected for AI quality assessment after the loop
     for form_name, form_id in INCIDENT_FORMS.items():
         submissions = fetch_form_submissions(form_id)
 
@@ -1742,6 +1816,20 @@ def run_audit(days_back=7, start_override=None, end_override=None, worker_id_fil
                     submitter, form_name, dlabel,
                     f"Entry #{entry_num} — description is only {len(desc_text.split())} words: "
                     f'"{desc_text[:120]}". NDIS requires sufficient detail to reconstruct the event.'))
+
+            # Queue substantive descriptions for AI quality assessment
+            if desc_text and len(desc_text.split()) >= 20:
+                incident_reports_for_claude.append({
+                    "id":     f"{form_id}_{entry_num}",
+                    "worker": submitter,
+                    "client": form_name,
+                    "date":   dlabel,
+                    "text":   desc_text,
+                    "_submitter": submitter,
+                    "_form_name": form_name,
+                    "_dlabel":    dlabel,
+                    "_entry":     entry_num,
+                })
 
             # Check for witness / notification fields
             answered_qs = {
@@ -1794,6 +1882,56 @@ def run_audit(days_back=7, start_override=None, end_override=None, worker_id_fil
                         submitter, form_name, dlabel,
                         f"Entry #{entry_num} -- {round(delay_h)}h between incident and report. "
                         "If this was a serious incident, the 24h NDIS Commission notification window may have passed."))
+
+    # -- AI quality assessment for incident report descriptions --
+    if incident_reports_for_claude and ANTHROPIC_API_KEY:
+        print(f"Assessing {len(incident_reports_for_claude)} incident report(s) with Claude AI...")
+        batch_size = 10
+        batches = [incident_reports_for_claude[i:i + batch_size]
+                   for i in range(0, len(incident_reports_for_claude), batch_size)]
+        ir_results = {}
+        max_w = min(len(batches), 5)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_w) as _irpool:
+            futs = [_irpool.submit(assess_incident_reports_with_claude, b) for b in batches]
+            for fut in concurrent.futures.as_completed(futs):
+                ir_results.update(fut.result())
+
+        for r in incident_reports_for_claude:
+            rid = r["id"]
+            a   = ir_results.get(rid)
+            if not a or a.get("severity") == "PASS":
+                continue
+            subm  = r["_submitter"]
+            fname = r["_form_name"]
+            dlbl  = r["_dlabel"]
+            entry = r["_entry"]
+
+            if not a.get("passes_ndis_standard"):
+                probs = "; ".join(a.get("issues", ["unspecified"]))
+                issues.append(Issue("HIGH", "INCIDENT REPORT — FAILS NDIS STANDARD",
+                    subm, fname, dlbl,
+                    f"Entry #{entry} — description does not meet NDIS incident documentation requirements. Issues: {probs}"))
+
+            if not a.get("has_sufficient_detail"):
+                issues.append(Issue("MEDIUM", "INCIDENT REPORT — INSUFFICIENT DETAIL",
+                    subm, fname, dlbl,
+                    f"Entry #{entry} — description lacks enough detail to reconstruct what happened. "
+                    "Include who was involved, what occurred, when, and where."))
+
+            if not a.get("is_factual_and_objective"):
+                issues.append(Issue("MEDIUM", "INCIDENT REPORT — SUBJECTIVE LANGUAGE",
+                    subm, fname, dlbl,
+                    f"Entry #{entry} — description contains opinions rather than factual observations."))
+
+            if not a.get("describes_worker_response"):
+                issues.append(Issue("MEDIUM", "INCIDENT REPORT — MISSING WORKER RESPONSE",
+                    subm, fname, dlbl,
+                    f"Entry #{entry} — does not describe what the support worker did in response to the incident."))
+
+            if not a.get("describes_participant_condition"):
+                issues.append(Issue("MEDIUM", "INCIDENT REPORT — MISSING PARTICIPANT CONDITION",
+                    subm, fname, dlbl,
+                    f"Entry #{entry} — does not describe the participant's condition before or after the incident."))
 
     # ------------------------------------------
     # SECTION 5 -- CLIENT-SPECIFIC COMPLIANCE
