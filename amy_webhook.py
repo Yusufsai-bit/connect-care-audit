@@ -1727,6 +1727,97 @@ JSON only."""
             alert_cc_management(reply)
 
 
+def _get_invoice_pay_period():
+    """Return (start_dt, end_dt, label) for the pay period being invoiced right now."""
+    from datetime import datetime as dt
+    import calendar
+    now = dt.now(AEST)
+    day = now.day
+    if day >= 16:
+        # Invoicing for 1st–15th of this month
+        start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        end   = now.replace(day=15, hour=23, minute=59, second=59, microsecond=0)
+        label = f"1–15 {now.strftime('%b %Y')}"
+    else:
+        # Invoicing for 16th–end of last month
+        first_of_this = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        last_month_end = first_of_this - timedelta(seconds=1)
+        last_day = calendar.monthrange(last_month_end.year, last_month_end.month)[1]
+        start = last_month_end.replace(day=16, hour=0, minute=0, second=0, microsecond=0)
+        end   = last_month_end.replace(day=last_day, hour=23, minute=59, second=59, microsecond=0)
+        label = f"16–{last_day} {last_month_end.strftime('%b %Y')}"
+    return start, end, label
+
+
+def _detect_invoice_trigger(text_lower: str, users: dict) -> tuple:
+    """
+    Return (worker_name, worker_id) if the message is an invoice submission trigger,
+    else (None, None).
+    """
+    invoice_keywords = {"invoice", "invoiced", "submitted their invoice", "sent their invoice",
+                        "sent his invoice", "sent her invoice", "submitted invoice"}
+    if not any(kw in text_lower for kw in invoice_keywords):
+        return None, None
+
+    # Match longest known worker name found in the message
+    best_name, best_id, best_len = None, None, 0
+    for uid, u in users.items():
+        full = f"{u.get('firstName', '')} {u.get('lastName', '')}".strip()
+        first = u.get("firstName", "").strip()
+        for candidate in [full, first]:
+            if candidate and candidate.lower() in text_lower and len(candidate) > best_len:
+                best_name, best_id, best_len = full, uid, len(candidate)
+    return best_name, best_id
+
+
+def _run_invoice_audit(worker_name: str, worker_id: str):
+    """Run a full pay-period audit scoped to one worker and post the result to CC Management."""
+    from connecteam_audit import run_audit, AEST as _AEST
+    start_dt, end_dt, period_label = _get_invoice_pay_period()
+
+    alert_cc_management(
+        f"⏳ Running invoice audit for {worker_name} ({period_label})..."
+    )
+
+    try:
+        issues = run_audit(
+            start_override=start_dt,
+            end_override=end_dt,
+            worker_id_filter=worker_id,
+        )
+    except Exception as e:
+        alert_cc_management(f"⚠️ Invoice audit for {worker_name} failed: {e}")
+        return
+
+    # Filter to issues that matter for invoice approval — skip LOW/informational
+    actionable = [i for i in issues if i.severity in ("CRITICAL", "HIGH", "MEDIUM")]
+
+    first = worker_name.split()[0]
+    if not actionable:
+        alert_cc_management(
+            f"✅ {first}'s invoice for {period_label} is clear — no compliance issues found. Safe to process."
+        )
+        return
+
+    # Group by severity for a clean summary
+    by_sev = {"CRITICAL": [], "HIGH": [], "MEDIUM": []}
+    for iss in actionable:
+        by_sev.get(iss.severity, by_sev["MEDIUM"]).append(iss)
+
+    lines = [f"⚠️ {first}'s invoice ({period_label}) — {len(actionable)} issue(s) to resolve before processing:\n"]
+    for sev in ("CRITICAL", "HIGH", "MEDIUM"):
+        for iss in by_sev[sev]:
+            lines.append(f"[{sev}] {iss.category} | {iss.client or 'N/A'} | {iss.date}")
+            lines.append(f"  → {iss.detail}")
+    lines.append("\nDo not approve the invoice until these are resolved.")
+
+    # Connecteam has a 1000-char message limit — split if needed
+    full_msg = "\n".join(lines)
+    chunk_size = 950
+    for i in range(0, len(full_msg), chunk_size):
+        alert_cc_management(full_msg[i:i + chunk_size])
+
+
 def handle_chat_reply(data):
     """
     Any worker message → Amy reads it, verifies any claims, and replies.
@@ -1751,6 +1842,23 @@ def handle_chat_reply(data):
     # ── Manager in CC Management → handle instruction or relay response ──────
     if conv_id == CC_MGMT_CONV_ID and uid in OBSERVER_IDS:
         text_lower = text.lower()
+
+        # Invoice audit trigger — "[name] sent their invoice" etc.
+        if CONNECTEAM_API_KEY:
+            try:
+                from connecteam_audit import fetch_all_users as _fetch_users
+                _users = _fetch_users()
+                inv_name, inv_id = _detect_invoice_trigger(text_lower, _users)
+                if inv_name and inv_id:
+                    threading.Thread(
+                        target=_run_invoice_audit,
+                        args=(inv_name, str(inv_id)),
+                        daemon=True,
+                    ).start()
+                    return
+            except Exception as e:
+                logger.warning(f"[invoice] trigger check failed: {e}")
+
         # Only treat as relay guidance if there are pending workers AND the message
         # looks like a response (contains a worker name OR a clear directive).
         # Prevents casual manager chat from accidentally triggering a worker send.
