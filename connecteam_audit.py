@@ -1085,18 +1085,29 @@ Return ONLY a valid JSON array. No explanation, no markdown."""
 # MAIN AUDIT
 # ---------------------------------------------
 
-def run_audit(days_back=7):
+def run_audit(days_back=7, start_override=None, end_override=None, worker_id_filter=None):
+    """
+    start_override / end_override: datetime objects (AEST) for invoice-scoped audits.
+    worker_id_filter: str user ID — when set, only issues for that worker are returned.
+    """
     now       = datetime.now(AEST)
     # Randomise the grace period (20–50 min) so notifications don't fire at a
     # predictable interval — prevents it feeling like an automated system.
     _clockout_grace_secs = random.randint(20, 50) * 60
-    start_dt  = now - timedelta(days=days_back)
+    if start_override and end_override:
+        start_dt = start_override
+        end_dt   = end_override
+    else:
+        start_dt = now - timedelta(days=days_back)
+        end_dt   = now
     start_date = start_dt.strftime("%Y-%m-%d")
-    end_date   = now.strftime("%Y-%m-%d")
+    end_date   = end_dt.strftime("%Y-%m-%d")
     start_ts   = int(start_dt.replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
-    end_ts     = int(now.replace(hour=23, minute=59, second=59, microsecond=0).timestamp())
+    end_ts     = int(end_dt.replace(hour=23, minute=59, second=59, microsecond=0).timestamp())
 
-    print(f"\nNDIS Compliance Audit -- {start_dt.strftime('%d %b')} to {now.strftime('%d %b %Y')}")
+    print(f"\nNDIS Compliance Audit -- {start_dt.strftime('%d %b')} to {end_dt.strftime('%d %b %Y')}")
+    if worker_id_filter:
+        print(f"Scoped to worker ID: {worker_id_filter}")
     print("Fetching data from Connecteam (parallel)...")
 
     # Clear per-run caches so stale data is never used
@@ -1134,6 +1145,11 @@ def run_audit(days_back=7):
         for fid, fut in _f_forms.items():
             try:    _FORM_SUBS_CACHE[fid] = fut.result()
             except: _FORM_SUBS_CACHE[fid] = []
+
+    # Scope to a single worker when running an invoice audit
+    if worker_id_filter:
+        wid_str = str(worker_id_filter)
+        activities_by_user = {k: v for k, v in activities_by_user.items() if str(k) == wid_str}
 
     # Onboarding needs active_user_ids — only remaining serial fetch
     active_user_ids = set(users.keys())
@@ -2177,8 +2193,15 @@ def run_audit(days_back=7):
     for iss in sorted_issues:
         counts[iss.severity] += 1
 
+    # When scoped to one worker, drop issues belonging to other workers
+    # (e.g. team-level issues that reference the full workforce)
+    if worker_id_filter:
+        worker_name_filter = uname(worker_id_filter)
+        sorted_issues = [i for i in sorted_issues
+                         if i.worker == worker_name_filter or i.worker in {"(team)", "unknown", ""}]
+
     print("\n" + "=" * 72)
-    print(f"  NDIS COMPLIANCE AUDIT  -  {start_dt.strftime('%d %b')} -> {now.strftime('%d %b %Y')}")
+    print(f"  NDIS COMPLIANCE AUDIT  -  {start_dt.strftime('%d %b')} -> {end_dt.strftime('%d %b %Y')}")
     print("=" * 72)
     print(f"  CRITICAL: {counts['CRITICAL']}  |  HIGH: {counts['HIGH']}  |  MEDIUM: {counts['MEDIUM']}  |  LOW: {counts['LOW']}")
     print("=" * 72)
