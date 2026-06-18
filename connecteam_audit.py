@@ -2200,12 +2200,21 @@ def run_audit(days_back=7, start_override=None, end_override=None, worker_id_fil
     for iss in sorted_issues:
         counts[iss.severity] += 1
 
-    # When scoped to one worker, drop issues belonging to other workers
-    # (e.g. team-level issues that reference the full workforce)
+    # When scoped to one worker, drop issues belonging to other workers.
+    # For team-level issues (worker="(team)"), only keep them if the client
+    # is one that this worker actually has shifts for — prevents form
+    # frequency issues for unrelated clients leaking into the audit.
     if worker_id_filter:
         worker_name_filter = uname(worker_id_filter)
-        sorted_issues = [i for i in sorted_issues
-                         if i.worker == worker_name_filter or i.worker in {"(team)", "unknown", ""}]
+        worker_clients = {
+            i.client for i in sorted_issues
+            if i.worker == worker_name_filter and i.client
+        }
+        sorted_issues = [
+            i for i in sorted_issues
+            if i.worker == worker_name_filter
+            or (i.worker in {"(team)", "unknown", ""} and (not i.client or i.client in worker_clients))
+        ]
 
     print("\n" + "=" * 72)
     print(f"  NDIS COMPLIANCE AUDIT  -  {start_dt.strftime('%d %b')} -> {end_dt.strftime('%d %b %Y')}")
