@@ -50,6 +50,7 @@ CRED_DEDUP_DAYS_SOON    = 7   # re-notify weekly for expiring-soon credentials
 # Rostering/management issues — go to CC Management only, never to the individual worker
 MANAGEMENT_ONLY_CATEGORIES = {
     "UNDERSTAFFED -- RATIO BREACH",
+    "PENDING AMENDMENT -- REVIEW REQUIRED",
 }
 
 CC_MGMT_CONV_ID   = os.environ.get("CC_MGMT_CONV_ID", "")
@@ -794,7 +795,9 @@ def main():
 
     for iss in issues:
         if iss.severity not in NOTIFY_SEVERITIES and not (
-            iss.severity == "MEDIUM" and iss.category in (CRED_CATEGORIES | {"UNSCHEDULED SHIFT"})
+            iss.severity == "MEDIUM" and iss.category in (
+                CRED_CATEGORIES | {"UNSCHEDULED SHIFT", "PENDING AMENDMENT -- WORKER NOTICE", "PENDING AMENDMENT -- REVIEW REQUIRED"}
+            )
         ):
             continue
         if iss.category in SKIP_CATEGORIES:
