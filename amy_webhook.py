@@ -1859,23 +1859,62 @@ def _run_invoice_audit(worker_name: str, worker_id: str):
         })
         return
 
-    # Group by severity for a clean summary
-    by_sev = {"CRITICAL": [], "HIGH": [], "MEDIUM": []}
-    for iss in actionable:
-        by_sev.get(iss.severity, by_sev["MEDIUM"]).append(iss)
+    from collections import defaultdict
 
-    lines = [f"⚠️ {first}'s invoice ({period_label}) — {len(actionable)} issue(s) to resolve before processing:\n"]
-    for sev in ("CRITICAL", "HIGH", "MEDIUM"):
-        for iss in by_sev[sev]:
-            lines.append(f"[{sev}] {iss.category} | {iss.client or 'N/A'} | {iss.date}")
-            lines.append(f"  → {iss.detail}")
-    lines.append("\nDo not approve the invoice until these are resolved.")
+    missing = [i for i in actionable if "MISSING FORM" in i.category]
+    freq    = [i for i in actionable if "FORM FREQUENCY" in i.category]
+    other   = [i for i in actionable if i not in missing and i not in freq]
 
-    # Connecteam has a 1000-char message limit — split if needed
+    lines = [f"⚠️ {first}'s invoice ({period_label}) — {len(actionable)} issue(s) to resolve before processing:"]
+
+    if missing:
+        by_client = defaultdict(lambda: defaultdict(list))
+        for iss in missing:
+            client = iss.client or "Unknown"
+            form = iss.detail.split(" not submitted")[0].strip()
+            by_client[client][iss.date].append(form)
+        lines.append("")
+        for client in sorted(by_client):
+            lines.append(f"Missing forms — {client}:")
+            for date in sorted(by_client[client]):
+                forms = sorted(set(by_client[client][date]))
+                lines.append(f"  • {date}: {', '.join(forms)}")
+
+    if freq:
+        lines.append("")
+        lines.append("Form frequency issues:")
+        for iss in freq:
+            lines.append(f"  • {iss.client or iss.category}: {iss.detail}")
+
+    if other:
+        lines.append("")
+        for iss in other:
+            lines.append(f"{iss.category} — {iss.client or 'N/A'} ({iss.date}): {iss.detail}")
+
+    lines.append("")
+    lines.append("Do not approve until all resolved.")
+
     full_msg = "\n".join(lines)
-    chunk_size = 950
-    for i in range(0, len(full_msg), chunk_size):
-        alert_cc_management(full_msg[i:i + chunk_size])
+
+    # Split at newline boundaries — never mid-line
+    def _split_at_lines(text, max_chars=950):
+        if len(text) <= max_chars:
+            return [text]
+        chunks, current = [], ""
+        for line in text.split("\n"):
+            candidate = (current + "\n" + line).lstrip("\n")
+            if len(candidate) > max_chars:
+                if current:
+                    chunks.append(current)
+                current = line
+            else:
+                current = candidate
+        if current:
+            chunks.append(current)
+        return chunks
+
+    for chunk in _split_at_lines(full_msg):
+        alert_cc_management(chunk)
 
     issues_summary = "\n".join(
         f"- [{iss.severity}] {iss.category} | {iss.client or 'N/A'} | {iss.date}: {iss.detail}"
