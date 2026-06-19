@@ -2081,11 +2081,13 @@ def run_audit(days_back=7, start_override=None, end_override=None, worker_id_fil
                     "Peter Eronmwon", "Michael Lawrie", dlabel_d,
                     "Michael Medications Plan Form only submitted once -- Peter worked morning and evening so two submissions expected."))
 
-    # ── PER-WEEK FORM FREQUENCY CHECKS ───────────────────────────────────────
-    # For each client, count how many general incident reports were filed this week
-    # by workers assigned to that client. Flag if below minimum.
+    # ── PER-PERIOD FORM FREQUENCY CHECKS ─────────────────────────────────────
+    # Scale weekly minimums by the number of weeks in the audit period so
+    # invoice audits (e.g. 1–15 June = 2 weeks) use the correct threshold.
+    period_weeks = max(1, round((end_ts - start_ts) / (7 * 86400)))
+    period_label_freq = "this week" if period_weeks == 1 else f"this {period_weeks}-week period"
 
-    def week_incident_count_for_client(title_keyword):
+    def period_incident_count_for_client(title_keyword):
         workers = workers_for_client(title_keyword)
         return sum(
             1 for s in fetch_form_submissions(FORMS["Incident Report"])
@@ -2094,39 +2096,43 @@ def run_audit(days_back=7, start_override=None, end_override=None, worker_id_fil
         )
 
     # Joshua -- 2x incident report, 2x ABC form per week
-    joshua_workers = workers_for_client("josh")
-    joshua_incidents = week_incident_count_for_client("josh")
-    joshua_abc = count_subs_in_window(FORMS["Joshua: ABC Form"], joshua_workers)
+    joshua_workers   = workers_for_client("josh")
+    joshua_incidents = period_incident_count_for_client("josh")
+    joshua_abc       = count_subs_in_window(FORMS["Joshua: ABC Form"], joshua_workers)
+    joshua_min       = 2 * period_weeks
 
-    if joshua_incidents < 2:
+    if joshua_incidents < joshua_min:
         issues.append(Issue("HIGH", "FORM FREQUENCY -- JOSHUA",
             "(team)", "Joshua Gatt", end_date,
-            f"Incident Report submitted {joshua_incidents}x this week -- minimum is 2."))
-    if joshua_abc < 2:
+            f"Incident Report submitted {joshua_incidents}x {period_label_freq} -- minimum is {joshua_min}."))
+    if joshua_abc < joshua_min:
         issues.append(Issue("HIGH", "FORM FREQUENCY -- JOSHUA",
             "(team)", "Joshua Gatt", end_date,
-            f"Joshua ABC Form submitted {joshua_abc}x this week -- minimum is 2."))
+            f"Joshua ABC Form submitted {joshua_abc}x {period_label_freq} -- minimum is {joshua_min}."))
 
     # Nada Haliem -- 2x incident report per week
-    nada_incidents = week_incident_count_for_client("nada")
-    if nada_incidents < 2:
+    nada_incidents = period_incident_count_for_client("nada")
+    nada_min       = 2 * period_weeks
+    if nada_incidents < nada_min:
         issues.append(Issue("HIGH", "FORM FREQUENCY -- NADA",
             "(team)", "Nada Haliem", end_date,
-            f"Incident Report submitted {nada_incidents}x this week -- minimum is 2."))
+            f"Incident Report submitted {nada_incidents}x {period_label_freq} -- minimum is {nada_min}."))
 
-    # John -- 2x incident report per week (covers John A and John Auzagelis)
-    john_incidents = week_incident_count_for_client("john")
-    if john_incidents < 2:
+    # John -- 2x incident report per week
+    john_incidents = period_incident_count_for_client("john")
+    john_min       = 2 * period_weeks
+    if john_incidents < john_min:
         issues.append(Issue("HIGH", "FORM FREQUENCY -- JOHN",
             "(team)", "John", end_date,
-            f"Incident Report submitted {john_incidents}x this week -- minimum is 2."))
+            f"Incident Report submitted {john_incidents}x {period_label_freq} -- minimum is {john_min}."))
 
     # Nicole -- 1x incident report per week
-    nicole_incidents = week_incident_count_for_client("nicole")
-    if nicole_incidents < 1:
+    nicole_incidents = period_incident_count_for_client("nicole")
+    nicole_min       = 1 * period_weeks
+    if nicole_incidents < nicole_min:
         issues.append(Issue("HIGH", "FORM FREQUENCY -- NICOLE",
             "(team)", "Nicole Loveless", end_date,
-            f"Incident Report submitted {nicole_incidents}x this week -- minimum is 1."))
+            f"Incident Report submitted {nicole_incidents}x {period_label_freq} -- minimum is {nicole_min}."))
 
     # ── BSP REFERENCE CHECKING -- Kallan Jordan & Joshua Gatt ────────────────
     # These clients have active Behaviour Support Plans. Shift notes must
