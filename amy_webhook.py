@@ -1956,7 +1956,19 @@ def _run_invoice_audit(worker_name: str, worker_id: str):
         for iss in rest:
             lines.append(f"  • {iss.category} — {iss.client or 'N/A'} ({iss.date}): {iss.detail}")
 
+    # Always confirm what quality checks ran
+    INCIDENT_QUALITY_CATS = {
+        "INCIDENT REPORT — FAILS NDIS STANDARD", "INCIDENT REPORT — INSUFFICIENT DETAIL",
+        "INCIDENT REPORT — SUBJECTIVE LANGUAGE", "INCIDENT REPORT — MISSING WORKER RESPONSE",
+        "INCIDENT REPORT — MISSING PARTICIPANT CONDITION",
+    }
+    NOTE_QUALITY_CATS = NOTE_CATS - INCIDENT_QUALITY_CATS
+    note_q_issues = [i for i in note_issues if i.category in NOTE_QUALITY_CATS]
+    ir_q_issues   = [i for i in note_issues if i.category in INCIDENT_QUALITY_CATS]
+    note_status = f"⚠️ {len(note_q_issues)} issue(s) found" if note_q_issues else "✅ clear"
+    ir_status   = f"⚠️ {len(ir_q_issues)} issue(s) found"  if ir_q_issues   else "✅ clear"
     lines.append("")
+    lines.append(f"Quality checks: shift notes {note_status} | incident reports {ir_status}")
     lines.append("Do not approve until all resolved.")
 
     full_msg = "\n".join(lines)
