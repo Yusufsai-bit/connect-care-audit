@@ -74,11 +74,15 @@ CLIENT_GPS_OVERRIDES = {
 QUIET_START = 19   # 7 PM AEST — no worker messages after this hour
 QUIET_END   = 6    # 6 AM AEST — no worker messages before this hour
 
-_SAFETY_KEYWORDS = {
-    "fall", "fallen", "injury", "injured", "unconscious", "ambulance", "hospital",
-    "emergency", "police", "assault", "attack", "missing", "not breathing",
-    "overdose", "seizure", "fire", "smoke", "danger", "unsafe", "urgent", "incident",
+# Tier 1 — any single keyword is enough to trigger emergency response
+_SAFETY_CRITICAL = {
+    "unconscious", "ambulance", "not breathing", "overdose", "seizure",
     "choking", "cpr", "not responding", "not waking", "called 000", "call 000",
+}
+# Tier 2 — two or more needed (prevents "urgent roster question" false positives)
+_SAFETY_CONCERN = {
+    "fall", "fallen", "injury", "injured", "hospital", "emergency", "police",
+    "assault", "attack", "missing", "fire", "smoke", "danger", "unsafe", "incident",
 }
 
 # ── Config ─────────────────────────────────────────────────────────────────────
@@ -215,6 +219,14 @@ def load_pending_relay():
 
 def save_pending_relay(queue):
     _gh_save("pending_relay_queue.json", queue)
+
+
+def _load_pending_draft() -> dict:
+    return _gh_load("pending_invoice_draft.json", {})
+
+
+def _save_pending_draft(data: dict):
+    _gh_save("pending_invoice_draft.json", data)
 
 
 # ── Shift notification dedup persistence ──────────────────────────────────────
@@ -629,7 +641,10 @@ def _is_quiet_hours() -> bool:
 
 def _is_safety_critical(text: str) -> bool:
     lowered = text.lower()
-    return any(kw in lowered for kw in _SAFETY_KEYWORDS)
+    if any(kw in lowered for kw in _SAFETY_CRITICAL):
+        return True
+    concern_count = sum(1 for kw in _SAFETY_CONCERN if kw in lowered)
+    return concern_count >= 2
 
 
 # ── Data fetchers (for build_context / manager queries) ───────────────────────
@@ -1068,14 +1083,24 @@ def alert_cc_management(text) -> bool:
 
 
 def load_worker_conversations() -> dict:
-    """Load worker_id → conversation_id mapping from worker_conversations.json."""
+    """Load worker_id → conversation_id mapping. Tries local disk first, then GitHub."""
     path = os.path.join(os.path.dirname(__file__) or ".", "worker_conversations.json")
     try:
         with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
     except FileNotFoundError:
-        logger.warning("worker_conversations.json not found — messages will fall back to private chat")
-        return {}
+        logger.warning("worker_conversations.json not on disk — trying GitHub fallback")
+        data = _gh_load("worker_conversations.json", {})
+        if data:
+            try:
+                with open(path, "w", encoding="utf-8") as f:
+                    json.dump(data, f, indent=2)
+                logger.info("worker_conversations.json restored from GitHub to local disk")
+            except Exception:
+                pass
+        else:
+            logger.error("worker_conversations.json missing from disk AND GitHub — worker messages will fail")
+        return data
     except Exception as e:
         logger.warning(f"Could not load worker_conversations.json: {e}")
         return {}
@@ -1100,8 +1125,33 @@ def send_connecteam_chat(user_id, text) -> bool:
     if not conv_id:
         return _fail("no group conversation mapped — run detect_worker_conversations() to fix")
     try:
-        MAX_CHUNK = 950
-        chunks = [text[i:i + MAX_CHUNK] for i in range(0, len(text), MAX_CHUNK)] if len(text) > MAX_CHUNK else [text]
+        def _word_chunks(s: str, limit: int = 950) -> list:
+            if len(s) <= limit:
+                return [s]
+            result, current = [], ""
+            for line in s.split("\n"):
+                candidate = (current + "\n" + line).lstrip("\n") if current else line
+                if len(candidate) <= limit:
+                    current = candidate
+                    continue
+                if current:
+                    result.append(current)
+                if len(line) <= limit:
+                    current = line
+                else:
+                    words, current = line.split(), ""
+                    for word in words:
+                        test = (current + " " + word).strip() if current else word
+                        if len(test) > limit:
+                            if current:
+                                result.append(current)
+                            current = word
+                        else:
+                            current = test
+            if current:
+                result.append(current)
+            return result or [s[:limit]]
+        chunks = _word_chunks(text)
         for chunk in chunks:
             r = requests.post(
                 f"{BASE_URL}/chat/v1/conversations/{conv_id}/message",
@@ -1779,14 +1829,24 @@ def _handle_manager_instruction(instruction):
             f"{_LAST_INVOICE_CONTEXT.get('issues_summary', '')[:1200]}\n"
         )
 
-    # Pre-check: pending draft waiting for "send it" confirmation — handle without Claude
     instruction_lower = instruction.lower().strip()
+
+    # Pre-check: restore pending draft from GitHub if server restarted after "draft it"
+    if not _LAST_INVOICE_CONTEXT.get("pending_draft"):
+        saved = _load_pending_draft()
+        if saved.get("draft") and saved.get("worker_id"):
+            _LAST_INVOICE_CONTEXT["pending_draft"]           = saved["draft"]
+            _LAST_INVOICE_CONTEXT["pending_draft_worker_id"] = saved["worker_id"]
+            if not _LAST_INVOICE_CONTEXT.get("worker"):
+                _LAST_INVOICE_CONTEXT["worker"] = saved.get("worker_name", "")
+            logger.info("[pending_draft] restored from GitHub after restart")
+
+    # Pre-check: pending draft waiting for explicit "send it" — must be unambiguous
     if _LAST_INVOICE_CONTEXT.get("pending_draft"):
-        _SEND_TRIGGERS = {"send it", "send", "yes", "yes send it", "go ahead", "confirm",
-                          "approved", "ok send", "ok", "okay", "yep", "yep send it"}
+        _SHORT_YES = {"yes", "ok", "okay", "yep", "go ahead", "confirm", "approved"}
         is_send = (
-            instruction_lower in _SEND_TRIGGERS
-            or any(t in instruction_lower for t in {"send it", "go ahead", "yes send", "send that", "send to"})
+            "send it" in instruction_lower
+            or instruction_lower.strip() in _SHORT_YES
         )
         if is_send:
             draft     = _LAST_INVOICE_CONTEXT["pending_draft"]
@@ -1803,6 +1863,7 @@ def _handle_manager_instruction(instruction):
                     alert_cc_management(f"Tried to send to {wname} but it didn't go through — check their chat setup.")
             _LAST_INVOICE_CONTEXT.pop("pending_draft", None)
             _LAST_INVOICE_CONTEXT.pop("pending_draft_worker_id", None)
+            _save_pending_draft({})
             return
 
     prompt = f"""You are Amy, a compliance assistant at Connect Care. You are OPERATIONAL ONLY — you answer questions from context and send messages to workers. You cannot do research, run background reviews, or promise to do anything later.
@@ -1902,6 +1963,7 @@ JSON only."""
         )
         _LAST_INVOICE_CONTEXT["pending_draft"] = draft
         _LAST_INVOICE_CONTEXT["pending_draft_worker_id"] = str(worker_id)
+        _save_pending_draft({"draft": draft, "worker_id": str(worker_id), "worker_name": worker_name})
         alert_cc_management(f'Draft to send {worker_name} — reply "send it" to confirm:\n\n{draft}')
         log_cc_mgmt("amy", f"Draft for {worker_name}: {draft[:500]}")
 
@@ -2263,8 +2325,12 @@ def handle_chat_reply(data):
         logger.info(f"[chat] skipped system notification (content pattern) from userId={user_id!r}: {text[:60]!r}")
         return
 
-    uid = int(user_id)
-    if uid in AMY_SENDER_IDS:
+    try:
+        uid = int(user_id)
+    except (ValueError, TypeError):
+        logger.warning(f"[chat] skipped — non-numeric userId={user_id!r}")
+        return
+    if uid in AMY_SENDER_IDS or uid == SENDER_ID:
         return
     if uid in DELETED_USER_IDS:
         return
@@ -2292,18 +2358,18 @@ def handle_chat_reply(data):
             except Exception as e:
                 logger.warning(f"[invoice] trigger check failed: {e}")
 
-        # Only treat as relay guidance if there are pending workers AND the message
-        # looks like a response (contains a worker name OR a clear directive).
-        # Prevents casual manager chat from accidentally triggering a worker send.
+        # Only treat as relay guidance if message has an explicit send directive AND
+        # contains a matching worker name — prevents casual questions triggering sends.
         if PENDING_RELAY_QUEUE:
-            RELAY_TRIGGERS = {"tell", "say", "let them know", "message", "reply", "respond", "send"}
+            RELAY_TRIGGERS = {"tell", "say", "let them know", "message", "reply", "respond"}
             has_directive   = any(t in text_lower for t in RELAY_TRIGGERS)
             matched_idx     = None
-            for i, r in enumerate(PENDING_RELAY_QUEUE):
-                first_name = r["worker_name"].split()[0].lower()
-                if first_name in text_lower and (has_directive or len(PENDING_RELAY_QUEUE) == 1):
-                    matched_idx = i
-                    break
+            if has_directive:
+                for i, r in enumerate(PENDING_RELAY_QUEUE):
+                    first_name = r["worker_name"].split()[0].lower()
+                    if first_name in text_lower:
+                        matched_idx = i
+                        break
             if matched_idx is not None:
                 relay    = PENDING_RELAY_QUEUE.pop(matched_idx)
                 save_pending_relay(PENDING_RELAY_QUEUE)
