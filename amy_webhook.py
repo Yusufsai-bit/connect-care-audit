@@ -1729,15 +1729,29 @@ def _handle_manager_instruction(instruction):
             f"{_LAST_INVOICE_CONTEXT.get('issues_summary', '')[:1200]}\n"
         )
 
-    prompt = f"""You are Amy, a support coordinator at Connect Care. Your manager just sent you this message:
+    prompt = f"""You are Amy, a compliance assistant at Connect Care. You are OPERATIONAL ONLY — you answer questions from context and send messages to workers. You cannot do research, run background reviews, or promise to do anything later.
 
-"{instruction}"
+Manager message: "{instruction}"
 {history_section}{invoice_ctx}
-Decide what to do:
-1. If they are asking about the recent invoice audit or anything in the conversation above: {{"action": "confirm", "reply": "<answer directly using the context — be specific, don't ask for clarification>"}}
-2. If they want you to message a specific worker: {{"action": "message_worker", "worker_name": "<name>", "message": "<message in your natural voice>"}}
-3. If you can't do what they're asking: {{"action": "cant_do", "reply": "<short explanation>"}}
-4. General/unclear: {{"action": "confirm", "reply": "<short natural reply>"}}
+STRICT RULES — never break these:
+- NEVER promise to review, check, or complete any task later
+- NEVER give ETAs or say you will "report back" or are "working on" something
+- NEVER say you are conducting or completing a review in the background
+- Only commit to things you can execute RIGHT NOW in this response
+
+Choose ONE action:
+
+If the manager is confirming YES to re-running an invoice audit (e.g. "yes", "yes please", "go ahead", "do it") AND there is a recent invoice audit in context:
+→ {{"action": "rerun_invoice", "worker_name": "<worker name from context>"}}
+
+If answering a question using the conversation history or invoice context above:
+→ {{"action": "confirm", "reply": "<direct factual answer — one or two sentences max>"}}
+
+If sending a message to a specific worker right now:
+→ {{"action": "message_worker", "worker_name": "<name>", "message": "<message>"}}
+
+If you cannot do what they're asking:
+→ {{"action": "cant_do", "reply": "<one sentence: what you can't do and what they should do instead — no apologies>"}}
 
 JSON only."""
     raw = _call_claude(prompt, max_tokens=300)
@@ -1754,7 +1768,20 @@ JSON only."""
         return
 
     action = result.get("action", "")
-    if action == "message_worker":
+
+    if action == "rerun_invoice":
+        worker_name = result.get("worker_name", "").strip()
+        if not worker_name and _LAST_INVOICE_CONTEXT:
+            worker_name = _LAST_INVOICE_CONTEXT.get("worker", "")
+        worker_id = _find_worker_id_by_name(worker_name) if worker_name else None
+        if not worker_id:
+            alert_cc_management("Can't re-run the audit — no worker identified. Try: '[name] sent their invoice for [period]'.")
+            return
+        alert_cc_management(f"Re-running invoice audit for {worker_name} now...")
+        log_cc_mgmt("amy", f"Re-running invoice audit for {worker_name}.")
+        threading.Thread(target=_run_invoice_audit, args=(worker_name, str(worker_id)), daemon=True).start()
+
+    elif action == "message_worker":
         worker_name = result.get("worker_name", "").strip()
         msg_to_send = result.get("message", "").strip()
         if not worker_name or not msg_to_send:
@@ -1771,9 +1798,10 @@ JSON only."""
             alert_cc_management(reply_text)
             log_cc_mgmt("amy", reply_text)
         else:
-            reply_text = f"Tried to message {worker_name} but it didn't go through — might be quiet hours or a chat issue."
+            reply_text = f"Tried to message {worker_name} but it didn't go through — check the worker's chat setup."
             alert_cc_management(reply_text)
             log_cc_mgmt("amy", reply_text)
+
     elif action in ("cant_do", "confirm"):
         reply = result.get("reply", "")
         if reply:
