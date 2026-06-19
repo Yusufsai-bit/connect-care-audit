@@ -105,10 +105,11 @@ BASE_URL = "https://api.connecteam.com"
 
 STAFF_IDS    = {"2149475", "9736871", "2201497"}   # Yusuf, Nada, Faduma
 OBSERVER_IDS = {2149475, 9736871, 2201497}          # int version for comparison
+DELETED_USER_IDS = {2149473}                        # deleted/ghost accounts — ignore all events
 
 SENDER_ID = int(CONNECTEAM_SENDER_ID or "0")
 AMY_SENDER_IDS = {SENDER_ID} if SENDER_ID else set()
-ALL_SYSTEM_IDS = OBSERVER_IDS | AMY_SENDER_IDS
+ALL_SYSTEM_IDS = OBSERVER_IDS | AMY_SENDER_IDS | DELETED_USER_IDS
 
 CONVO_LOG_FILE    = "amy_conversation_log.json"
 PROFILES_FILE     = "worker_profiles.json"
@@ -1589,7 +1590,7 @@ def handle_clock_out(data):
     """
     user_id = data.get("userId")
     job_id  = data.get("jobId")
-    if not user_id or int(user_id) in OBSERVER_IDS:
+    if not user_id or int(user_id) in OBSERVER_IDS or int(user_id) in DELETED_USER_IDS:
         return
 
     worker_name = get_worker_name(user_id)
