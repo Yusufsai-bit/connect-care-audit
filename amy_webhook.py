@@ -1893,19 +1893,6 @@ def _run_invoice_audit(worker_name: str, worker_id: str):
     freq    = [i for i in actionable if "FORM FREQUENCY" in i.category]
     other   = [i for i in actionable if i not in missing and i not in freq]
 
-    lines = [f"⚠️ {first}'s invoice ({period_label}) — {len(actionable)} issue(s) to resolve before processing:"]
-
-    NOTE_CATS = {
-        "NO SHIFT NOTES", "SHORT NOTES", "COPY-PASTE NOTES", "BACKDATED NOTES",
-        "AI NOTE QUALITY", "MISSING SIGNATURE",
-        "FAILS NDIS STANDARD", "POSSIBLE AI-GENERATED NOTE", "NOT PLAIN ENGLISH",
-        "NOTE DOESN'T MAKE SENSE", "SUBJECTIVE LANGUAGE", "NOT PERSON-CENTRED", "NO PLAN GOAL REFERENCE",
-        "INCIDENT REPORT — DESCRIPTION TOO BRIEF", "INCIDENT REPORT — MISSING WITNESS/NOTIFICATION",
-        "INCIDENT REPORT — FAILS NDIS STANDARD", "INCIDENT REPORT — INSUFFICIENT DETAIL",
-        "INCIDENT REPORT — SUBJECTIVE LANGUAGE", "INCIDENT REPORT — MISSING WORKER RESPONSE",
-        "INCIDENT REPORT — MISSING PARTICIPANT CONDITION",
-    }
-
     _MONTH_ORD = {"Jan":1,"Feb":2,"Mar":3,"Apr":4,"May":5,"Jun":6,
                   "Jul":7,"Aug":8,"Sep":9,"Oct":10,"Nov":11,"Dec":12}
     def _date_key(d):
@@ -1916,80 +1903,154 @@ def _run_invoice_audit(worker_name: str, worker_id: str):
         except Exception:
             return (0, 0)
 
-    SYSTEMATIC_THRESHOLD = 5  # 5+ missing dates → flag as systematic
-
-    if missing:
-        # Group by client → form → dates (one line per form, chronologically sorted)
-        by_client_form = defaultdict(lambda: defaultdict(list))
-        for iss in missing:
-            client = iss.client or "Unknown"
-            form = iss.detail.split(" not submitted")[0].strip()
-            by_client_form[client][form].append(iss.date)
-        lines.append("")
-        for client in sorted(by_client_form):
-            lines.append(f"Missing forms — {client}:")
-            for form in sorted(by_client_form[client]):
-                dates = sorted(set(by_client_form[client][form]), key=_date_key)
-                if len(dates) >= SYSTEMATIC_THRESHOLD:
-                    lines.append(f"  • {form}: not submitted on {len(dates)} shift days "
-                                 f"({dates[0]} → {dates[-1]}) — appears systematic")
-                else:
-                    lines.append(f"  • {form}: {', '.join(dates)}")
-
-    if freq:
-        lines.append("")
-        lines.append("Form frequency issues:")
-        for iss in freq:
-            lines.append(f"  • {iss.client or iss.category}: {iss.detail}")
-
+    SYSTEMATIC_THRESHOLD = 5
     INCIDENT_QUALITY_CATS = {
         "INCIDENT REPORT — DESCRIPTION TOO BRIEF", "INCIDENT REPORT — MISSING WITNESS/NOTIFICATION",
         "INCIDENT REPORT — FAILS NDIS STANDARD", "INCIDENT REPORT — INSUFFICIENT DETAIL",
         "INCIDENT REPORT — SUBJECTIVE LANGUAGE", "INCIDENT REPORT — MISSING WORKER RESPONSE",
         "INCIDENT REPORT — MISSING PARTICIPANT CONDITION",
     }
-    NOTE_QUALITY_CATS = NOTE_CATS - INCIDENT_QUALITY_CATS
-
-    note_issues    = [i for i in other if i.category in NOTE_CATS]
-    rest           = [i for i in other if i.category not in NOTE_CATS]
-    note_q_issues  = [i for i in note_issues if i.category in NOTE_QUALITY_CATS]
-    ir_q_issues    = [i for i in note_issues if i.category in INCIDENT_QUALITY_CATS]
-
-    # Quality assessment — always shown as its own section.
-    # Count how many shift days had missing incident reports so we can flag
-    # if there were no submitted reports to assess.
-    missing_ir_days = {
-        iss.date for iss in missing
-        if "incident report" in (iss.detail or "").lower()
+    NOTE_QUALITY_CATS = {
+        "NO SHIFT NOTES", "SHORT NOTES", "COPY-PASTE NOTES", "BACKDATED NOTES",
+        "AI NOTE QUALITY", "MISSING SIGNATURE", "FAILS NDIS STANDARD",
+        "POSSIBLE AI-GENERATED NOTE", "NOT PLAIN ENGLISH", "NOTE DOESN'T MAKE SENSE",
+        "SUBJECTIVE LANGUAGE", "NOT PERSON-CENTRED", "NO PLAN GOAL REFERENCE",
     }
-    has_submitted_ir = bool(ir_q_issues) or not missing_ir_days or len(missing_ir_days) < len({
-        iss.date for iss in missing if iss.client  # total unique shift days with any missing form
-    })
 
+    # Bucket the non-missing/freq issues by type
+    gps_issues        = [i for i in other if i.category == "GPS MISMATCH"]
+    overbilling       = [i for i in other if "OVERBILLING" in i.category]
+    ir_quality        = [i for i in other if i.category in INCIDENT_QUALITY_CATS]
+    note_quality      = [i for i in other if i.category in NOTE_QUALITY_CATS]
+    auto_clockout     = [i for i in other if i.category == "AUTO CLOCK-OUT"]
+    understaffed      = [i for i in other if "UNDERSTAFFED" in i.category]
+    amendments_mgmt   = [i for i in other if i.category == "PENDING AMENDMENT -- REVIEW REQUIRED"]
+    shift_leftover    = [i for i in other
+                         if i not in gps_issues and i not in overbilling and i not in ir_quality
+                         and i not in note_quality and i not in auto_clockout
+                         and i not in understaffed and i not in amendments_mgmt
+                         and "PENDING AMENDMENT" not in i.category
+                         and "BREAK COMPLIANCE" not in i.category]
+
+    lines = [f"Invoice audit — {first} ({period_label}) — {len(actionable)} issues to resolve before processing:"]
+
+    # --- OVERBILLING RISK ---
+    if overbilling:
+        lines.append("")
+        lines.append("OVERBILLING RISK")
+        for iss in overbilling:
+            lines.append(f"  • {iss.detail}")
+
+    # --- GPS MISMATCH ---
+    if gps_issues:
+        gps_by_client = defaultdict(list)
+        for iss in gps_issues:
+            gps_by_client[iss.client or "unknown"].append(iss)
+        lines.append("")
+        lines.append(f"GPS MISMATCH — {len(gps_issues)} shift(s)")
+        for client in sorted(gps_by_client):
+            entries = gps_by_client[client]
+            dates = sorted({i.date for i in entries}, key=_date_key)
+            kms = []
+            for i in entries:
+                m = re.search(r"(\d+\.\d+)km", i.detail or "")
+                if m:
+                    kms.append(float(m.group(1)))
+            km_part = f" — {min(kms):.1f}–{max(kms):.1f}km off" if kms else ""
+            if len(dates) == 1:
+                lines.append(f"  • {client}: {dates[0]}{km_part}")
+            else:
+                lines.append(f"  • {client}: {len(dates)} shift days ({dates[0]} → {dates[-1]}){km_part}")
+
+    # --- INCIDENT REPORT QUALITY ---
+    if ir_quality:
+        by_entry = defaultdict(list)
+        for iss in ir_quality:
+            m = re.search(r"Entry #(\d+)", iss.detail or "")
+            key = m.group(1) if m else iss.date
+            by_entry[key].append(iss)
+        lines.append("")
+        lines.append(f"Incident report quality — {len(by_entry)} submitted")
+        for entry_key in sorted(by_entry, key=lambda k: _date_key(by_entry[k][0].date)):
+            group = by_entry[entry_key]
+            ref = group[0]
+            date_str = ref.date
+            client_str = f" ({ref.client})" if ref.client else ""
+            problems = []
+            for iss in group:
+                brief_m = re.search(r'description is only \d+ words?: "([^"]+)"', iss.detail or "")
+                if brief_m:
+                    problems.append(f'"{brief_m.group(1)}" — too brief')
+                elif "MISSING WITNESS" in iss.category:
+                    problems.append("no witness/notification recorded")
+                else:
+                    problems.append(iss.detail.split(".")[0] if iss.detail else iss.category)
+            lines.append(f"  • {date_str}{client_str}: {'; '.join(problems)}")
+
+    # --- MISSING FORMS ---
+    if missing:
+        by_client_form = defaultdict(lambda: defaultdict(list))
+        for iss in missing:
+            client = iss.client or "Unknown"
+            form = iss.detail.split(" not submitted")[0].strip()
+            by_client_form[client][form].append(iss.date)
+        form_lines = []
+        for client in sorted(by_client_form):
+            for form in sorted(by_client_form[client]):
+                dates = sorted(set(by_client_form[client][form]), key=_date_key)
+                label = f"{client} — {form}" if len(by_client_form) > 1 else form
+                if len(dates) >= SYSTEMATIC_THRESHOLD:
+                    form_lines.append(
+                        f"  • {label}: {len(dates)} shift days ({dates[0]} → {dates[-1]}) — appears systematic"
+                    )
+                else:
+                    form_lines.append(f"  • {label}: {', '.join(dates)}")
+        lines.append("")
+        lines.append("Missing forms")
+        lines.extend(form_lines)
+
+    # --- FORM FREQUENCY ---
+    if freq:
+        lines.append("")
+        lines.append("Form frequency below minimum")
+        for iss in freq:
+            lines.append(f"  • {iss.client or iss.category}: {iss.detail}")
+
+    # --- SHIFT ISSUES (auto clock-out, understaffed, amendments) ---
+    shift_section = []
+    for iss in auto_clockout:
+        shift_section.append(f"  • Auto clock-out: {iss.date} — {iss.client or 'shift'} force-closed at system cutoff")
+    for iss in understaffed:
+        shift_section.append(f"  • Understaffed: {iss.date} — {iss.client or 'shift'}: {iss.detail.split('—')[0].strip()}")
+    if amendments_mgmt:
+        shift_section.append(f"  • {len(amendments_mgmt)} pending shift amendment(s) — review and approve/reject in Connecteam before processing")
+    if shift_leftover:
+        for iss in shift_leftover:
+            shift_section.append(f"  • {iss.category} ({iss.date}): {iss.detail}")
+    if shift_section:
+        lines.append("")
+        lines.append("Shift issues")
+        lines.extend(shift_section)
+
+    # --- Quality assessment ---
     lines.append("")
     lines.append("Quality assessment (submitted documents only):")
-
-    if note_q_issues:
-        lines.append("  Shift notes: ⚠️ issues found")
-        for iss in note_q_issues:
+    if note_quality:
+        lines.append("  Shift notes: issues found")
+        for iss in note_quality:
             lines.append(f"    • {iss.date} ({iss.client or 'N/A'}): {iss.detail}")
     else:
-        lines.append("  Shift notes: ✅ submitted notes assessed — no quality issues")
+        lines.append("  Shift notes: all submitted notes assessed — no quality issues")
 
-    if ir_q_issues:
-        lines.append("  Incident reports: ⚠️ issues found")
-        for iss in ir_q_issues:
-            lines.append(f"    • {iss.date} ({iss.client or 'N/A'}): {iss.detail}")
-    elif has_submitted_ir:
-        lines.append("  Incident reports: ✅ submitted reports assessed — no quality issues")
+    if ir_quality:
+        lines.append("  Incident reports: see section above")
     else:
-        lines.append("  Incident reports: ⚠️ no reports submitted this period — nothing to assess")
-
-    if rest:
-        lines.append("")
-        lines.append("Other issues:")
-        for iss in rest:
-            lines.append(f"  • {iss.category} — {iss.client or 'N/A'} ({iss.date}): {iss.detail}")
+        missing_ir_days = {iss.date for iss in missing if "incident report" in (iss.detail or "").lower()}
+        all_shift_days = {iss.date for iss in missing if iss.client}
+        if not missing_ir_days or len(missing_ir_days) < len(all_shift_days):
+            lines.append("  Incident reports: submitted reports assessed — no quality issues")
+        else:
+            lines.append("  Incident reports: no reports submitted this period — nothing to assess")
 
     lines.append("")
     lines.append("Do not approve until all resolved.")
