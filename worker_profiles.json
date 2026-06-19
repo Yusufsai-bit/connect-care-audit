@@ -66,5 +66,13 @@
     "open_issues": [
       "LATE CLOCK-IN"
     ]
+  },
+  "2455370": {
+    "worker_name": "Mohamed Liban",
+    "last_issue_date": "19 Jun 2026",
+    "last_issue_summary": "EARLY CLOCK-OUT (Kallan Jordan); AUTO CLOCK-OUT (Kallan Jordan); INCIDENT REPORT \u2014 FAILS NDIS STANDARD (Kallan Incident Report)",
+    "open_issues": [
+      "EARLY CLOCK-OUT"
+    ]
   }
 }
