@@ -2118,6 +2118,8 @@ def handle_chat_reply(data):
     uid = int(user_id)
     if uid in AMY_SENDER_IDS:
         return
+    if uid in DELETED_USER_IDS:
+        return
 
     # ── Manager in CC Management → handle instruction or relay response ──────
     if conv_id == CC_MGMT_CONV_ID and uid in OBSERVER_IDS:
@@ -2303,7 +2305,7 @@ def _fire_shift_check(shift):
     assigned = shift.get("assignedUserIds") or []
     notified = load_shift_notified()
     for uid in assigned:
-        if uid in OBSERVER_IDS:
+        if uid in OBSERVER_IDS or uid in DELETED_USER_IDS:
             continue
         key = f"{uid}_{shift_id}"
         if key in notified:
