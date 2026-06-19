@@ -1941,14 +1941,35 @@ def _run_invoice_audit(worker_name: str, worker_id: str):
         for iss in freq:
             lines.append(f"  • {iss.client or iss.category}: {iss.detail}")
 
-    note_issues = [i for i in other if i.category in NOTE_CATS]
-    rest        = [i for i in other if i.category not in NOTE_CATS]
+    INCIDENT_QUALITY_CATS = {
+        "INCIDENT REPORT — FAILS NDIS STANDARD", "INCIDENT REPORT — INSUFFICIENT DETAIL",
+        "INCIDENT REPORT — SUBJECTIVE LANGUAGE", "INCIDENT REPORT — MISSING WORKER RESPONSE",
+        "INCIDENT REPORT — MISSING PARTICIPANT CONDITION",
+    }
+    NOTE_QUALITY_CATS = NOTE_CATS - INCIDENT_QUALITY_CATS
 
-    if note_issues:
-        lines.append("")
-        lines.append("Note & incident report quality issues:")
-        for iss in note_issues:
-            lines.append(f"  • {iss.date} ({iss.client or 'N/A'}): {iss.detail}")
+    note_issues    = [i for i in other if i.category in NOTE_CATS]
+    rest           = [i for i in other if i.category not in NOTE_CATS]
+    note_q_issues  = [i for i in note_issues if i.category in NOTE_QUALITY_CATS]
+    ir_q_issues    = [i for i in note_issues if i.category in INCIDENT_QUALITY_CATS]
+
+    # Quality assessment — always shown as its own section
+    lines.append("")
+    lines.append("Quality assessment:")
+
+    if note_q_issues:
+        lines.append("  Shift notes:")
+        for iss in note_q_issues:
+            lines.append(f"    • {iss.date} ({iss.client or 'N/A'}): {iss.detail}")
+    else:
+        lines.append("  Shift notes: ✅ all good")
+
+    if ir_q_issues:
+        lines.append("  Incident reports:")
+        for iss in ir_q_issues:
+            lines.append(f"    • {iss.date} ({iss.client or 'N/A'}): {iss.detail}")
+    else:
+        lines.append("  Incident reports: ✅ all good")
 
     if rest:
         lines.append("")
@@ -1956,19 +1977,7 @@ def _run_invoice_audit(worker_name: str, worker_id: str):
         for iss in rest:
             lines.append(f"  • {iss.category} — {iss.client or 'N/A'} ({iss.date}): {iss.detail}")
 
-    # Always confirm what quality checks ran
-    INCIDENT_QUALITY_CATS = {
-        "INCIDENT REPORT — FAILS NDIS STANDARD", "INCIDENT REPORT — INSUFFICIENT DETAIL",
-        "INCIDENT REPORT — SUBJECTIVE LANGUAGE", "INCIDENT REPORT — MISSING WORKER RESPONSE",
-        "INCIDENT REPORT — MISSING PARTICIPANT CONDITION",
-    }
-    NOTE_QUALITY_CATS = NOTE_CATS - INCIDENT_QUALITY_CATS
-    note_q_issues = [i for i in note_issues if i.category in NOTE_QUALITY_CATS]
-    ir_q_issues   = [i for i in note_issues if i.category in INCIDENT_QUALITY_CATS]
-    note_status = f"⚠️ {len(note_q_issues)} issue(s) found" if note_q_issues else "✅ clear"
-    ir_status   = f"⚠️ {len(ir_q_issues)} issue(s) found"  if ir_q_issues   else "✅ clear"
     lines.append("")
-    lines.append(f"Quality checks: shift notes {note_status} | incident reports {ir_status}")
     lines.append("Do not approve until all resolved.")
 
     full_msg = "\n".join(lines)
