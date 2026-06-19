@@ -800,16 +800,10 @@ def send_worker_message(user_id, text, worker_name=None):
 
     def _fail(reason):
         print(f"[ERROR] send_worker_message failed for {label}: {reason}")
-        fail_alert = f"⚠️ Amy couldn't send a message to {label} ({reason}). Message was:\n\n{text[:500]}"
-        # Alert CC Management and DM Yusuf so nothing is missed
-        yusuf_id = 2149475
-        for target in [CC_MGMT_CONV_ID, None]:
-            endpoint = (
-                f"/chat/v1/conversations/{target}/message"
-                if target else
-                f"/chat/v1/conversations/privateMessage/{yusuf_id}"
-            )
-            ct_post(endpoint, {"senderId": CONNECTEAM_SENDER_ID, "text": fail_alert[:1000]})
+        fail_alert = f"Amy couldn't send a message to {label} ({reason}). Message was:\n\n{text[:500]}"
+        if CC_MGMT_CONV_ID:
+            ct_post(f"/chat/v1/conversations/{CC_MGMT_CONV_ID}/message",
+                    {"senderId": CONNECTEAM_SENDER_ID, "text": fail_alert[:1000]})
         return False, reason
 
     if not conv_id:
