@@ -1093,31 +1093,23 @@ def send_connecteam_chat(user_id, text) -> bool:
     conv_id  = conv_map.get(str(user_id))
     def _fail(reason):
         logger.error(f"send_connecteam_chat failed for user {user_id}: {reason}")
-        alert_cc_management(f"⚠️ Amy couldn't send a message to user {user_id} ({reason}). Message was:\n\n{text[:500]}")
-        # Also DM Yusuf directly so nothing is missed
-        yusuf_id = 2149475
-        try:
-            requests.post(
-                f"{BASE_URL}/chat/v1/conversations/privateMessage/{yusuf_id}",
-                headers={"X-API-KEY": CONNECTEAM_API_KEY, "Content-Type": "application/json"},
-                json={"senderId": sender_id, "text": f"⚠️ Failed to deliver message to user {user_id}. Message:\n\n{text[:500]}"},
-                timeout=15,
-            )
-        except Exception:
-            pass
+        alert_cc_management(f"Amy couldn't send a message to user {user_id} ({reason}). Message was:\n\n{text[:500]}")
         return False
 
     if not conv_id:
         return _fail("no group conversation mapped — run detect_worker_conversations() to fix")
     try:
-        r = requests.post(
-            f"{BASE_URL}/chat/v1/conversations/{conv_id}/message",
-            headers={"X-API-KEY": CONNECTEAM_API_KEY, "Content-Type": "application/json"},
-            json={"senderId": sender_id, "text": text[:4000]},
-            timeout=15,
-        )
-        if not r.ok:
-            return _fail(f"group conv {conv_id} returned {r.status_code}")
+        MAX_CHUNK = 950
+        chunks = [text[i:i + MAX_CHUNK] for i in range(0, len(text), MAX_CHUNK)] if len(text) > MAX_CHUNK else [text]
+        for chunk in chunks:
+            r = requests.post(
+                f"{BASE_URL}/chat/v1/conversations/{conv_id}/message",
+                headers={"X-API-KEY": CONNECTEAM_API_KEY, "Content-Type": "application/json"},
+                json={"senderId": sender_id, "text": chunk},
+                timeout=15,
+            )
+            if not r.ok:
+                return _fail(f"group conv {conv_id} returned {r.status_code}")
         return True
     except Exception as e:
         return _fail(str(e))
