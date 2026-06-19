@@ -2106,11 +2106,18 @@ def handle_chat_reply(data):
          - Complex → Amy holds, asks CC Management "what should I tell [worker]?"
     """
     global PENDING_RELAY_QUEUE
-    user_id = data.get("userId") or data.get("senderId") or data.get("authorId")
-    text    = (data.get("text") or data.get("content") or data.get("messageText")
-               or data.get("body") or data.get("message") or "").strip()
-    conv_id = str(data.get("conversationId") or data.get("channelId") or data.get("chatId") or "")
-    logger.info(f"[chat] raw fields — keys={list(data.keys())} userId={user_id!r} conv={conv_id!r} text={text[:60]!r}")
+    user_id      = data.get("userId") or data.get("senderId") or data.get("authorId")
+    text         = (data.get("text") or data.get("content") or data.get("messageText")
+                    or data.get("body") or data.get("message") or "").strip()
+    conv_id      = str(data.get("conversationId") or data.get("channelId") or data.get("chatId") or "")
+    message_type = (data.get("messageType") or data.get("type") or "").lower()
+    logger.info(f"[chat] raw fields — keys={list(data.keys())} userId={user_id!r} conv={conv_id!r} type={message_type!r} text={text[:60]!r}")
+
+    # Skip Connecteam system notifications (form status changes, auto-messages etc.)
+    if message_type == "custom":
+        logger.info(f"[chat] skipped system notification (messageType=custom) from userId={user_id!r}")
+        return
+
     if not user_id or not text:
         logger.info(f"[chat] skipped — userId={user_id!r} text={text[:40]!r}")
         return
