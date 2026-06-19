@@ -2118,8 +2118,29 @@ def handle_chat_reply(data):
         logger.info(f"[chat] skipped system notification (messageType=custom) from userId={user_id!r}")
         return
 
+    # Block any other known system/automated message types
+    _SYSTEM_MSG_TYPES = {"system", "notification", "bot", "event", "automated"}
+    if message_type in _SYSTEM_MSG_TYPES:
+        logger.info(f"[chat] skipped system message (messageType={message_type!r}) from userId={user_id!r}")
+        return
+
     if not user_id or not text:
         logger.info(f"[chat] skipped — userId={user_id!r} text={text[:40]!r}")
+        return
+
+    # Content-pattern guard — catches system notifications that arrive with missing/wrong messageType
+    _SYSTEM_TEXT_PATTERNS = (
+        "changed status on the form",
+        'changed "status" on the form',
+        "submitted a form",
+        "updated the form",
+        "added a new entry to",
+        "approved a form submission",
+        "rejected a form submission",
+        "completed a form",
+    )
+    if any(p in text.lower() for p in _SYSTEM_TEXT_PATTERNS):
+        logger.info(f"[chat] skipped system notification (content pattern) from userId={user_id!r}: {text[:60]!r}")
         return
 
     uid = int(user_id)
