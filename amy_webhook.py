@@ -1691,6 +1691,48 @@ def _post_to_cc_mgmt(relay):
         )
 
 
+def _compose_invoice_worker_draft(worker_name: str, period: str, issues_summary: str) -> str:
+    """Compose a worker-facing invoice audit message structured into two sections."""
+    first = worker_name.split()[0]
+    if not ANTHROPIC_API_KEY:
+        return (
+            f"Hey {first}, been through your invoice for {period} — a few things need sorting "
+            f"before we can process it. Check Connecteam for outstanding forms and get them in asap."
+        )
+    prompt = f"""You are Amy, a coordinator at Connect Care. Write a message to {first} about their invoice for {period}.
+
+Issues found (format: [SEVERITY] CATEGORY | Client | Date: Detail):
+{issues_summary}
+
+Structure the message in TWO sections (plain text, no markdown, no bold, no special characters):
+
+Section 1 header: "To complete before invoice is processed:"
+Include issues with categories: MISSING FORM, FORM FREQUENCY
+These must be fixed before the invoice can be approved.
+
+Section 2 header: "For your awareness:"
+Include issues with categories containing: INCIDENT REPORT, NOTE, SHIFT NOTE, AI NOTE, COPY-PASTE, BACKDATED, SUBJECTIVE, PERSON-CENTRED
+These are quality observations — no action needed right now.
+If there are no quality issues, omit Section 2 entirely.
+
+Rules:
+- Open with: Hey {first}, been through your invoice for {period} —
+- Be specific: name the client, the form, the date
+- For systematic missing forms (same form/client, many dates): say "missing across most of the fortnight" not every date
+- For frequency issues: state "needs to be Nx per fortnight, currently at N" with exact numbers
+- For quality issues: describe briefly what was wrong (e.g. "description too brief", "missing witness")
+- Use dashes for list items
+- No bullet symbols, no numbered lists
+- End with: "Get the outstanding submissions in and I'll let you know once we're cleared to process."
+- Blank line between sections
+- Output just the message, nothing else"""
+    result = _call_claude(prompt, max_tokens=700)
+    return result or (
+        f"Hey {first}, been through your invoice for {period} — a few things need sorting "
+        f"before we can process it. Check Connecteam for outstanding forms and get them in asap."
+    )
+
+
 def _handle_manager_instruction(instruction):
     """
     Manager posted a direct instruction to Amy in CC Management.
@@ -1722,6 +1764,32 @@ def _handle_manager_instruction(instruction):
             f"{_LAST_INVOICE_CONTEXT.get('issues_summary', '')[:1200]}\n"
         )
 
+    # Pre-check: pending draft waiting for "send it" confirmation — handle without Claude
+    instruction_lower = instruction.lower().strip()
+    if _LAST_INVOICE_CONTEXT.get("pending_draft"):
+        _SEND_TRIGGERS = {"send it", "send", "yes", "yes send it", "go ahead", "confirm",
+                          "approved", "ok send", "ok", "okay", "yep", "yep send it"}
+        is_send = (
+            instruction_lower in _SEND_TRIGGERS
+            or any(t in instruction_lower for t in {"send it", "go ahead", "yes send", "send that", "send to"})
+        )
+        if is_send:
+            draft     = _LAST_INVOICE_CONTEXT["pending_draft"]
+            worker_id = _LAST_INVOICE_CONTEXT.get("pending_draft_worker_id")
+            wname     = _LAST_INVOICE_CONTEXT.get("worker", "worker")
+            if worker_id:
+                sent = _worker_send(worker_id, draft)
+                if sent:
+                    append_to_conversation(worker_id, "amy", draft)
+                    confirm_msg = f"Sent to {wname}."
+                    alert_cc_management(confirm_msg)
+                    log_cc_mgmt("amy", confirm_msg)
+                else:
+                    alert_cc_management(f"Tried to send to {wname} but it didn't go through — check their chat setup.")
+            _LAST_INVOICE_CONTEXT.pop("pending_draft", None)
+            _LAST_INVOICE_CONTEXT.pop("pending_draft_worker_id", None)
+            return
+
     prompt = f"""You are Amy, a compliance assistant at Connect Care. You are OPERATIONAL ONLY — you answer questions from context and send messages to workers. You cannot do research, run background reviews, or promise to do anything later.
 
 Manager message: "{instruction}"
@@ -1737,10 +1805,13 @@ Choose ONE action:
 If the manager is confirming YES to re-running an invoice audit (e.g. "yes", "yes please", "go ahead", "do it") AND there is a recent invoice audit in context:
 → {{"action": "rerun_invoice", "worker_name": "<worker name from context>"}}
 
+If the manager says the invoice result is fine and wants to draft or send a message to the worker (e.g. "looks good message [name]", "let [name] know", "draft message for [name]", "message [name] the results", "send [name] the results") AND there is a recent invoice audit in context:
+→ {{"action": "draft_invoice_message", "worker_name": "<worker name from context or message>"}}
+
 If answering a question using the conversation history or invoice context above:
 → {{"action": "confirm", "reply": "<direct factual answer — one or two sentences max>"}}
 
-If sending a message to a specific worker right now:
+If sending a message to a specific worker right now (not invoice-related):
 → {{"action": "message_worker", "worker_name": "<name>", "message": "<message>"}}
 
 If you cannot do what they're asking:
@@ -1794,6 +1865,26 @@ JSON only."""
             reply_text = f"Tried to message {worker_name} but it didn't go through — check the worker's chat setup."
             alert_cc_management(reply_text)
             log_cc_mgmt("amy", reply_text)
+
+    elif action == "draft_invoice_message":
+        worker_name = result.get("worker_name", "").strip()
+        if not worker_name and _LAST_INVOICE_CONTEXT:
+            worker_name = _LAST_INVOICE_CONTEXT.get("worker", "")
+        worker_id = _find_worker_id_by_name(worker_name) if worker_name else None
+        if not worker_id:
+            alert_cc_management(f"Can't find '{worker_name}' in Connecteam — check the name?")
+            return
+        period         = _LAST_INVOICE_CONTEXT.get("period", "this period")
+        issues_summary = _LAST_INVOICE_CONTEXT.get("issues_summary", "")
+        if not issues_summary:
+            alert_cc_management("No invoice audit in context — run the audit first.")
+            return
+        alert_cc_management(f"Drafting message for {worker_name}...")
+        draft = _compose_invoice_worker_draft(worker_name, period, issues_summary)
+        _LAST_INVOICE_CONTEXT["pending_draft"] = draft
+        _LAST_INVOICE_CONTEXT["pending_draft_worker_id"] = str(worker_id)
+        alert_cc_management(f'Draft to send {worker_name} — reply "send it" to confirm:\n\n{draft}')
+        log_cc_mgmt("amy", f"Draft for {worker_name}: {draft[:500]}")
 
     elif action in ("cant_do", "confirm"):
         reply = result.get("reply", "")
