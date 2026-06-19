@@ -1953,23 +1953,35 @@ def _run_invoice_audit(worker_name: str, worker_id: str):
     note_q_issues  = [i for i in note_issues if i.category in NOTE_QUALITY_CATS]
     ir_q_issues    = [i for i in note_issues if i.category in INCIDENT_QUALITY_CATS]
 
-    # Quality assessment — always shown as its own section
+    # Quality assessment — always shown as its own section.
+    # Count how many shift days had missing incident reports so we can flag
+    # if there were no submitted reports to assess.
+    missing_ir_days = {
+        iss.date for iss in missing
+        if "incident report" in (iss.detail or "").lower()
+    }
+    has_submitted_ir = bool(ir_q_issues) or not missing_ir_days or len(missing_ir_days) < len({
+        iss.date for iss in missing if iss.client  # total unique shift days with any missing form
+    })
+
     lines.append("")
-    lines.append("Quality assessment:")
+    lines.append("Quality assessment (submitted documents only):")
 
     if note_q_issues:
-        lines.append("  Shift notes:")
+        lines.append("  Shift notes: ⚠️ issues found")
         for iss in note_q_issues:
             lines.append(f"    • {iss.date} ({iss.client or 'N/A'}): {iss.detail}")
     else:
-        lines.append("  Shift notes: ✅ all good")
+        lines.append("  Shift notes: ✅ submitted notes assessed — no quality issues")
 
     if ir_q_issues:
-        lines.append("  Incident reports:")
+        lines.append("  Incident reports: ⚠️ issues found")
         for iss in ir_q_issues:
             lines.append(f"    • {iss.date} ({iss.client or 'N/A'}): {iss.detail}")
+    elif has_submitted_ir:
+        lines.append("  Incident reports: ✅ submitted reports assessed — no quality issues")
     else:
-        lines.append("  Incident reports: ✅ all good")
+        lines.append("  Incident reports: ⚠️ no reports submitted this period — nothing to assess")
 
     if rest:
         lines.append("")
