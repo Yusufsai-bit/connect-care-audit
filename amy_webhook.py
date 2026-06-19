@@ -2001,8 +2001,12 @@ def _detect_invoice_trigger(text_lower: str, users: dict) -> tuple:
     Return (worker_name, worker_id) if the message is an invoice submission trigger,
     else (None, None).
     """
-    invoice_keywords = {"invoice", "invoiced", "submitted their invoice", "sent their invoice",
-                        "sent his invoice", "sent her invoice", "submitted invoice"}
+    invoice_keywords = {
+        "submitted their invoice", "sent their invoice",
+        "sent his invoice", "sent her invoice",
+        "submitted his invoice", "submitted her invoice",
+        "sent invoice", "submitted invoice",
+    }
     if not any(kw in text_lower for kw in invoice_keywords):
         return None, None
 
