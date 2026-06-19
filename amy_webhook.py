@@ -1877,8 +1877,20 @@ def _run_invoice_audit(worker_name: str, worker_id: str):
         "INCIDENT REPORT — MISSING PARTICIPANT CONDITION",
     }
 
+    _MONTH_ORD = {"Jan":1,"Feb":2,"Mar":3,"Apr":4,"May":5,"Jun":6,
+                  "Jul":7,"Aug":8,"Sep":9,"Oct":10,"Nov":11,"Dec":12}
+    def _date_key(d):
+        try:
+            parts = d.split(" (")[0].strip().split()
+            day, mon = parts[-1].split("-")
+            return (_MONTH_ORD.get(mon, 0), int(day))
+        except Exception:
+            return (0, 0)
+
+    SYSTEMATIC_THRESHOLD = 5  # 5+ missing dates → flag as systematic
+
     if missing:
-        # Group by client → form → dates (one line per form, all dates listed)
+        # Group by client → form → dates (one line per form, chronologically sorted)
         by_client_form = defaultdict(lambda: defaultdict(list))
         for iss in missing:
             client = iss.client or "Unknown"
@@ -1888,8 +1900,12 @@ def _run_invoice_audit(worker_name: str, worker_id: str):
         for client in sorted(by_client_form):
             lines.append(f"Missing forms — {client}:")
             for form in sorted(by_client_form[client]):
-                dates = sorted(set(by_client_form[client][form]))
-                lines.append(f"  • {form}: {', '.join(dates)}")
+                dates = sorted(set(by_client_form[client][form]), key=_date_key)
+                if len(dates) >= SYSTEMATIC_THRESHOLD:
+                    lines.append(f"  • {form}: not submitted on {len(dates)} shift days "
+                                 f"({dates[0]} → {dates[-1]}) — appears systematic")
+                else:
+                    lines.append(f"  • {form}: {', '.join(dates)}")
 
     if freq:
         lines.append("")
@@ -2033,8 +2049,16 @@ def handle_chat_reply(data):
                 if PENDING_RELAY_QUEUE:
                     _post_to_cc_mgmt(PENDING_RELAY_QUEUE[0])
                 return
-        # Check if it's a direct instruction to Amy ("Amy, message X...")
-        if "amy" in text_lower:
+        # Respond to any question or instruction — not just name mentions
+        _Q_WORDS  = {"what","who","when","where","why","how","did","has","have",
+                     "can","could","is","are","was","were","show","tell","check",
+                     "run","look","pull","find","get","update","review","audit",
+                     "message","send","any","which"}
+        first_word = text_lower.split()[0] if text_lower.split() else ""
+        is_question    = "?" in text or first_word in _Q_WORDS
+        is_instruction = any(w in text_lower for w in {"amy","tell","message","send","check",
+                                                        "run","audit","review","find","look"})
+        if is_question or is_instruction:
             _handle_manager_instruction(text)
         return
 
