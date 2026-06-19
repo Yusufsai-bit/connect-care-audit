@@ -1691,7 +1691,10 @@ def _post_to_cc_mgmt(relay):
         )
 
 
-def _compose_invoice_worker_draft(worker_name: str, period: str, issues_summary: str) -> str:
+def _compose_invoice_worker_draft(
+    worker_name: str, period: str, issues_summary: str,
+    notes_clean: bool = False, ir_clean: bool = False,
+) -> str:
     """Compose a worker-facing invoice audit message structured into two sections."""
     first = worker_name.split()[0]
     if not ANTHROPIC_API_KEY:
@@ -1699,12 +1702,22 @@ def _compose_invoice_worker_draft(worker_name: str, period: str, issues_summary:
             f"Hey {first}, been through your invoice for {period} — a few things need sorting "
             f"before we can process it. Check Connecteam for outstanding forms and get them in asap."
         )
+    praise_lines = []
+    if notes_clean:
+        praise_lines.append("- Shift notes: well written this period — no issues at all")
+    if ir_clean:
+        praise_lines.append("- Incident reports: all good quality — nothing to flag")
+    praise_block = (
+        "\nWhat was assessed and looks good (mention positively, naturally):\n" + "\n".join(praise_lines)
+        if praise_lines else "\nNothing assessed as clean — omit any praise section."
+    )
     prompt = f"""You are Amy, a coordinator at Connect Care. Write a message to {first} about their invoice for {period}.
 
 Issues found (format: [SEVERITY] CATEGORY | Client | Date: Detail):
 {issues_summary}
+{praise_block}
 
-Structure the message in TWO sections (plain text, no markdown, no bold, no special characters):
+Structure the message (plain text, no markdown, no bold, no special characters):
 
 Section 1 header: "To complete before invoice is processed:"
 Include issues with categories: MISSING FORM, FORM FREQUENCY
@@ -1714,6 +1727,8 @@ Section 2 header: "For your awareness:"
 Include issues with categories containing: INCIDENT REPORT, NOTE, SHIFT NOTE, AI NOTE, COPY-PASTE, BACKDATED, SUBJECTIVE, PERSON-CENTRED
 These are quality observations — no action needed right now.
 If there are no quality issues, omit Section 2 entirely.
+
+If anything was assessed as clean (see above), add a short line acknowledging it naturally after the issues — e.g. "Shift notes look great this period." or "Incident reports are all good." Keep it brief and genuine, not over the top.
 
 Rules:
 - Open with: Hey {first}, been through your invoice for {period} —
@@ -1880,7 +1895,11 @@ JSON only."""
             alert_cc_management("No invoice audit in context — run the audit first.")
             return
         alert_cc_management(f"Drafting message for {worker_name}...")
-        draft = _compose_invoice_worker_draft(worker_name, period, issues_summary)
+        draft = _compose_invoice_worker_draft(
+            worker_name, period, issues_summary,
+            notes_clean=_LAST_INVOICE_CONTEXT.get("notes_clean", False),
+            ir_clean=_LAST_INVOICE_CONTEXT.get("ir_clean", False),
+        )
         _LAST_INVOICE_CONTEXT["pending_draft"] = draft
         _LAST_INVOICE_CONTEXT["pending_draft_worker_id"] = str(worker_id)
         alert_cc_management(f'Draft to send {worker_name} — reply "send it" to confirm:\n\n{draft}')
@@ -2166,6 +2185,14 @@ def _run_invoice_audit(worker_name: str, worker_id: str):
         for iss in actionable
     )
 
+    # Determine what was clean for the worker draft praise
+    _missing_ir_days = {i.date for i in missing if "incident report" in (i.detail or "").lower()}
+    _all_shift_days  = {i.date for i in missing if i.client}
+    ir_submitted_clean = (
+        len(ir_quality) == 0
+        and (not _missing_ir_days or len(_missing_ir_days) < len(_all_shift_days))
+    )
+
     # Store context so Amy can answer follow-up questions (in-memory + persistent)
     global _LAST_INVOICE_CONTEXT
     _LAST_INVOICE_CONTEXT = {
@@ -2173,6 +2200,8 @@ def _run_invoice_audit(worker_name: str, worker_id: str):
         "period":        period_label,
         "issue_count":   len(actionable),
         "issues_summary": issues_summary,
+        "notes_clean":   len(note_quality) == 0,
+        "ir_clean":      ir_submitted_clean,
     }
     # Log the audit result to CC Management history (capped at 1500 chars)
     log_cc_mgmt("amy", full_msg[:1500])
