@@ -16,8 +16,8 @@
     "messages": [
       {
         "sender": "amy",
-        "text": "Hi Ali,\n\nQuick thing \u2014 you didn't submit any shift notes for Kallan Jordan's shift on Monday 15th. Just a reminder these need to be done within 30 mins of finishing up. Can you get those in when you get a chance?",
-        "ts": 1781517088
+        "text": "Thanks for getting back to me! Just a couple other things that popped up:\n\nSo on Wednesday and Thursday last week (17th & 18th), the system auto-closed your shifts at Kallan's at 15:10 both days. Just make sure you're clocking out manually before you leave \u2014 otherwise it can mess with the hours logged.\n\nAlso on Wednesday, the incident report you filed needs a bit more detail. Right now it just says \"Behavioural\" but NDIS needs enough info to actually understand what happened. And we're also missing who you notified after \u2014 whether that's the family, guardian, or whoever. Can you add those in?\n\nOne more thing \u2014 you've clocked 17.3 hours this period but were only rostered for 12. That extra 5.3 hours needs to be authorised before we can bill it, so just double-check with your manager on that.\n\nOh, and I see you've got three pending shift amendments in (Wed, Thu, Fri). They've come through fine \u2014 just sitting in the queue for approval. No action needed from you, just wanted you to know they're being looked at.",
+        "ts": 1781847665
       }
     ]
   },
@@ -27,8 +27,8 @@
     "messages": [
       {
         "sender": "amy",
-        "text": "Hi Irfanullah, just flagged an issue from your shift on Sunday at Joshua's place \u2014 you clocked in 6km away from his address on Lloyd St. You need to be within 0.5km and clocked in at the actual location before you start. Can you make sure that's sorted for next time?",
-        "ts": 1781517088
+        "text": "Got a couple of things from Kallan Jordan's shift on Thursday that need sorting:\n\nYou clocked in 217 mins late at Kallan's \u2014 was meant to be 15:00 but didn't get there til 18:37. What happened there?\n\nAlso, the system auto-closed your shift at 21:10 since you didn't clock out manually. Just make sure you're clocking out yourself when you finish, yeah?\n\nOne more thing \u2014 you sent in a shift amendment for that day and we've got it. Just letting you know it's in the system and pending review on our end. Nothing you need to do, we'll sort it and get back to you.",
+        "ts": 1781847665
       }
     ]
   },
@@ -38,8 +38,8 @@
     "messages": [
       {
         "sender": "amy",
-        "text": "Hi Mayada, just flagged something from your shift on Monday 15-Jun at Nada Haliem's \u2014 no shift notes were submitted at all. Can you get those in? They need to be done within 30 mins of finishing up. Cheers!",
-        "ts": 1781517088
+        "text": "Also just noticed you clocked out early on Friday at Nada Haliem's \u2014 left at 14:09 when you were scheduled until 16:00. Can you let me know what happened there?\n\nAnd one more thing \u2014 you submitted a shift amendment for that same Friday that's pending review. Just wanted to let you know we've got it and it's being looked at, so no need to do anything else on your end.",
+        "ts": 1781847665
       }
     ]
   },
@@ -49,8 +49,8 @@
     "messages": [
       {
         "sender": "amy",
-        "text": "Hi Mohamed,\n\nGot a few things to flag from Kallan's shifts this week:\n\n**Sunday 14-Jun:** You clocked in 74 mins late (10:14 instead of 09:00) and then the system auto-closed your shift at 21:10 because you didn't manually clock out. Can you make sure to clock out properly at the end of your shifts?\n\n**Monday 15-Jun:** The shift notes are pretty messy \u2014 they're incomplete, cut off mid-sentence, and don't really make sense. They also need to meet NDIS standards, so they need to be clear observations, not opinions or interpretations. Plus the note mentions something about aggression \u2014 did you file a formal incident report for that? If something happened, we need the report submitted.\n\nRemember notes need to go in within 30 mins of finishing up. Can you sort these out and let me know about the incident report?",
-        "ts": 1781517088
+        "text": "Thanks for getting back to me. Just a couple more things that came up:\n\n**Friday 19-Jun:** You left at 15:10 but were rostered until 21:00 \u2014 that's a pretty big gap. And the system auto-closed your shift instead of you clocking out manually. Can you make sure you're clocking out at the end of your shifts going forward?\n\n**Thursday 18-Jun:** You clocked in 95 mins late (10:34 instead of 09:00). Just flagging it so we've got it on record.\n\nOn the incident reports from Wednesday \u2014 we've got Entry #340 flagged because some of the language is a bit subjective (like \"erupted in anger\", \"beyond reason\") when NDIS needs factual descriptions of what actually happened. Also need to clarify if \"he said he wanted to harm us\" is a direct quote or your interpretation. And for both incidents we need to know who was notified after \u2014 whether that's family, guardians, or whoever. Can you update those?\n\nYou've also got a few shift amendments pending review, so just let you know we've got your notes and they're being looked at.",
+        "ts": 1781847665
       }
     ]
   },
@@ -60,8 +60,8 @@
     "messages": [
       {
         "sender": "amy",
-        "text": "Hi Peter,\n\nJust checking in on your shift at Michael Lawrie's on Sunday 14th \u2014 the notes mention he got hurt. Did you end up filing a formal incident report for that? Need to make sure that's been submitted.",
-        "ts": 1781517088
+        "text": "Thanks for getting back to me on that.\n\nQuick heads up on a few things on your end:\n\nYou clocked 8.4 hours this period but were only rostered for 5 \u2014 that's 3.4 hours over. Need you to double-check that all the extra time was approved before we bill it.\n\nAlso noticed you left Joshua Gatt's place on Friday the 19th at 11:20 when you were scheduled until 2pm \u2014 that's a 160 min gap. What happened there?\n\nOne more thing \u2014 you've got a couple of shift amendments pending review (Wed 17th and Fri 19th at Joshua's, plus one from John on Thu 18th). Just letting you know we've got your notes and they're being looked at. Nothing else you need to do on those.",
+        "ts": 1781847665
       }
     ]
   },
@@ -71,8 +71,41 @@
     "messages": [
       {
         "sender": "amy",
-        "text": "Hi Roja, couple of things from your shifts that need sorting. On Sunday at Kallan's you clocked in 4.8km away from the address \u2014 needs to be within 0.5km, so make sure you're actually at the place before clocking in. Also the system force-closed that shift at 15:10 because you didn't manually clock out, so keep an eye on that.\n\nThen yesterday at John's place on Edgars Road you clocked in 4.2km away again \u2014 same deal, gotta be at the actual address. And no shift notes were submitted for that one either \u2014 just a reminder those need to be done within 30 mins of finishing up.",
-        "ts": 1781517088
+        "text": "Hey, couple more things to sort out actually.\n\nYou didn't clock in at all for Kallan's on Wednesday (15:00\u201321:00 shift) \u2014 need you to make sure you're clocking in for every shift you work.\n\nSame with Joshua's on Thursday morning (09:00\u201314:00) \u2014 that one never got clocked in either.\n\nAlso, there's an incident report you filed for Kallan's on Wednesday that needs more detail. Right now it just says \"Training cancelled\" but we need enough info to actually understand what happened \u2014 NDIS needs that.\n\nAnd on that same report, we need to know who was notified about it (like a guardian or family member). Can you add that in when you get a chance?",
+        "ts": 1781847665
+      }
+    ]
+  },
+  "7931909": {
+    "worker_name": "Abdul Latif",
+    "conversation_id": "2e2d5619-4c15-46aa-9233-d2fd9a07693a",
+    "messages": [
+      {
+        "sender": "amy",
+        "text": "Hi Abdul,\n\nGot a few things to sort out from your recent shifts at Evan Gatt's place.\n\nSo on Thursday and Friday (18th & 19th), you filed incident reports but the descriptions were super brief \u2014 just \"evan gatt\" each time. NDIS needs way more detail so they can actually understand what happened. Can you add some proper notes to those?\n\nAlso missing from both reports \u2014 who was there when it happened and who you told about it (like family/guardians). That's required too.\n\nOn a lighter note, you've got three shift amendments pending review from Wednesday, Thursday, and Friday. Just wanted to let you know we got them and they're being looked at \u2014 nothing else you need to do on your end.\n\nCan you get those incident report details filled in though? Those need to be done within 30 mins of the shift ending so we can get them sorted properly.",
+        "ts": 1781847665
+      }
+    ]
+  },
+  "9736867": {
+    "worker_name": "Hajar El Hassan",
+    "conversation_id": "ab900c89-e5d3-4990-b3a5-c664ad56739c",
+    "messages": [
+      {
+        "sender": "amy",
+        "text": "Hi Hajar,\n\nQuick heads up on a couple of shift amendments. Nicole Loveless submitted one for Wednesday 17-Jun and Mathew B Worden submitted one for Friday 19-Jun \u2014 both are just waiting on our end for review. Their notes came through fine, so nothing for them to do now, just wanted to let you know they're in the queue.",
+        "ts": 1781847665
+      }
+    ]
+  },
+  "6636920": {
+    "worker_name": "Ikram Mohammad",
+    "conversation_id": "078a07c7-a562-4a52-937e-cb4dd1a52497",
+    "messages": [
+      {
+        "sender": "amy",
+        "text": "Hi Ikram,\n\nJust flagging something from your roster \u2014 Xavier Putchakayla on Thursday 18th June (17:00\u201321:00 shift) never clocked in. Can you let me know what happened there?",
+        "ts": 1781847665
       }
     ]
   }
