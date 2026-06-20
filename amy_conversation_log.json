@@ -60,8 +60,8 @@
     "messages": [
       {
         "sender": "amy",
-        "text": "Thanks for getting back to me on that.\n\nQuick heads up on a few things on your end:\n\nYou clocked 8.4 hours this period but were only rostered for 5 \u2014 that's 3.4 hours over. Need you to double-check that all the extra time was approved before we bill it.\n\nAlso noticed you left Joshua Gatt's place on Friday the 19th at 11:20 when you were scheduled until 2pm \u2014 that's a 160 min gap. What happened there?\n\nOne more thing \u2014 you've got a couple of shift amendments pending review (Wed 17th and Fri 19th at Joshua's, plus one from John on Thu 18th). Just letting you know we've got your notes and they're being looked at. Nothing else you need to do on those.",
-        "ts": 1781847665
+        "text": "Just one more thing \u2014 you've also got a shift amendment pending for Evan Gatt on Saturday the 20th. Your notes are in and being reviewed, so nothing else you need to do on that one either.",
+        "ts": 1781931910
       }
     ]
   },
@@ -106,6 +106,17 @@
         "sender": "amy",
         "text": "Hi Ikram,\n\nJust flagging something from your roster \u2014 Xavier Putchakayla on Thursday 18th June (17:00\u201321:00 shift) never clocked in. Can you let me know what happened there?",
         "ts": 1781847665
+      }
+    ]
+  },
+  "14468881": {
+    "worker_name": "Ahmed Yehia",
+    "conversation_id": "c1ff0883-4d04-47d5-8c0a-ac6881407d41",
+    "messages": [
+      {
+        "sender": "amy",
+        "text": "Hi Ahmed,\n\nJust flagging a couple of things from your shift at Joshua Gatt's on Saturday:\n\nThe system auto clock-out kicked in at 14:10 since you didn't manually clock out \u2014 just so you know for next time, make sure to do that before you leave.\n\nAlso got your shift amendment request and we've got your notes. They're pending review on our end, so nothing you need to do \u2014 we'll sort it and let you know.",
+        "ts": 1781931910
       }
     ]
   }

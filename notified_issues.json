@@ -556,5 +556,95 @@
     "category": "PENDING AMENDMENT -- REVIEW REQUIRED",
     "client": "Joshua Gatt",
     "pending": true
+  },
+  "cf049889f7d4441316561c964fa8679a": {
+    "date": "2026-06-20",
+    "worker": "Ahmed Yehia",
+    "sent_ts": 1781931910,
+    "acknowledged": false,
+    "category": "AUTO CLOCK-OUT",
+    "client": "Joshua Gatt",
+    "pending": false
+  },
+  "f0545c519a73a74d8e67c1d0cbc7f44b": {
+    "date": "2026-06-20",
+    "worker": "Ahmed Yehia",
+    "sent_ts": 1781931910,
+    "acknowledged": false,
+    "category": "PENDING AMENDMENT -- WORKER NOTICE",
+    "client": "Joshua Gatt",
+    "pending": true
+  },
+  "b4bb47901c8e807e82b7708db9addca6": {
+    "date": "2026-06-20",
+    "worker": "Peter Eronmwon",
+    "sent_ts": 1781931910,
+    "acknowledged": false,
+    "category": "PENDING AMENDMENT -- WORKER NOTICE",
+    "client": "Evan Gatt",
+    "pending": true
+  },
+  "cb59ca67154d64ebf8e8938b626a9342": {
+    "date": "2026-06-20",
+    "worker": "(team)",
+    "category": "FORM FREQUENCY -- JOHN",
+    "client": "John",
+    "pending": false
+  },
+  "8b57fa1704f45efda242cd3c4845ee58": {
+    "date": "2026-06-20",
+    "worker": "(team)",
+    "category": "FORM FREQUENCY -- JOSHUA",
+    "client": "Joshua Gatt",
+    "pending": false
+  },
+  "3ef8c1e7c30d055079fc6d056e585597": {
+    "date": "2026-06-20",
+    "worker": "(team)",
+    "category": "FORM FREQUENCY -- NADA",
+    "client": "Nada Haliem",
+    "pending": false
+  },
+  "3405a4310db342c9a2c1fda7db415d20": {
+    "date": "2026-06-20",
+    "worker": "(team)",
+    "category": "FORM FREQUENCY -- NICOLE",
+    "client": "Nicole Loveless",
+    "pending": false
+  },
+  "374f75625ddb1f4a28d38be90aa7385a": {
+    "date": "2026-06-20",
+    "worker": "(team)",
+    "category": "MISSING FORM -- EVAN",
+    "client": "Evan Gatt",
+    "pending": false
+  },
+  "fcbab73a23d9a2871a8e863276c09d60": {
+    "date": "2026-06-20",
+    "worker": "(team)",
+    "category": "MISSING FORM -- KALLAN",
+    "client": "Kallan Jordan",
+    "pending": false
+  },
+  "3af02d80f0b6eddd374b239bbd9e051f": {
+    "date": "2026-06-20",
+    "worker": "Mohamed Liban",
+    "category": "UNDERSTAFFED -- RATIO BREACH",
+    "client": "Kallan Jordan",
+    "pending": false
+  },
+  "01e67146209757deaac453a3250d1c1b": {
+    "date": "2026-06-20",
+    "worker": "Ahmed Yehia",
+    "category": "PENDING AMENDMENT -- REVIEW REQUIRED",
+    "client": "Joshua Gatt",
+    "pending": true
+  },
+  "a7e0141d3b5a670df8368914adb7355c": {
+    "date": "2026-06-20",
+    "worker": "Peter Eronmwon",
+    "category": "PENDING AMENDMENT -- REVIEW REQUIRED",
+    "client": "Evan Gatt",
+    "pending": true
   }
 }
