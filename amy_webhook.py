@@ -2246,9 +2246,11 @@ def _run_invoice_audit(worker_name: str, worker_id: str):
     for chunk in _split_at_lines(full_msg):
         alert_cc_management(chunk)
 
+    _WORKER_EXCLUDED_CATS = {"PENDING AMENDMENT -- REVIEW REQUIRED"}
     issues_summary = "\n".join(
         f"- [{iss.severity}] {iss.category} | {iss.client or 'N/A'} | {iss.date}: {iss.detail}"
         for iss in actionable
+        if iss.category not in _WORKER_EXCLUDED_CATS and "UNDERSTAFFED" not in iss.category
     )
 
     # Determine what was clean for the worker draft praise
