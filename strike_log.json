@@ -1,0 +1,22 @@
+[
+  {
+    "worker": "Hajar El Hassan",
+    "category": "AUTO CLOCK-OUT",
+    "date": "2026-06-21"
+  },
+  {
+    "worker": "Hajar El Hassan",
+    "category": "OVERBILLING RISK -- HOURS EXCEED ROSTER",
+    "date": "2026-06-21"
+  },
+  {
+    "worker": "Mohamed Liban",
+    "category": "NO CLOCK-IN",
+    "date": "2026-06-21"
+  },
+  {
+    "worker": "Mohamed Liban",
+    "category": "AUTO CLOCK-OUT",
+    "date": "2026-06-21"
+  }
+]
