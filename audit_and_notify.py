@@ -61,8 +61,10 @@ if not CC_MGMT_CONV_ID:
     raise RuntimeError("CC_MGMT_CONV_ID environment variable is not set")
 BASE_URL          = "https://api.connecteam.com"
 NOTIFIED_FILE     = os.path.join(os.path.dirname(os.path.abspath(__file__)), "notified_issues.json")
+STRIKE_LOG_FILE   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "strike_log.json")
 CONVO_LOG_FILE    = os.path.join(os.path.dirname(os.path.abspath(__file__)), "amy_conversation_log.json")
 DEDUP_EXPIRY_DAYS = 2   # forget fingerprints older than this
+STRIKE_LOG_DAYS   = 30  # how far back strike history looks
 
 
 # ── Worker profile updater (GitHub-persisted) ─────────────────────────────────
@@ -142,15 +144,34 @@ def save_notified(notified: dict):
 
 # ── Message generation ────────────────────────────────────────────────────────
 
-def _get_strike_count(worker_name: str, category: str, notified: dict) -> int:
+def _load_strike_log() -> list:
+    """Load strike history (30-day window), pruning stale entries on load."""
+    cutoff = (datetime.datetime.now(AEST) - datetime.timedelta(days=STRIKE_LOG_DAYS)).strftime("%Y-%m-%d")
+    try:
+        with open(STRIKE_LOG_FILE, "r", encoding="utf-8") as f:
+            entries = json.load(f)
+        return [e for e in entries if e.get("date", "") >= cutoff]
+    except Exception:
+        return []
+
+
+def _append_strikes(worker_name: str, categories: list, today: str):
+    """Append one entry per category to the strike log and save."""
+    entries = _load_strike_log()
+    for cat in categories:
+        entries.append({"worker": worker_name, "category": cat, "date": today})
+    try:
+        with open(STRIKE_LOG_FILE, "w", encoding="utf-8") as f:
+            json.dump(entries, f, indent=2)
+    except Exception as e:
+        print(f"  [WARN] Strike log write failed: {e}")
+
+
+def _get_strike_count(worker_name: str, category: str, _notified_unused: dict = None) -> int:
     """Count how many times this worker has been notified for this category in the last 30 days."""
-    cutoff = (datetime.datetime.now(AEST) - datetime.timedelta(days=30)).strftime("%Y-%m-%d")
     return sum(
-        1 for v in notified.values()
-        if isinstance(v, dict)
-        and v.get("worker") == worker_name
-        and v.get("category") == category
-        and v.get("date", "") >= cutoff
+        1 for e in _load_strike_log()
+        if e.get("worker") == worker_name and e.get("category") == category
     )
 
 
@@ -788,6 +809,18 @@ def main():
 
     issues = run_audit(DAYS_BACK)
 
+    # ── Auto-resolve: mark notified issues as resolved if they're no longer flagged ──
+    current_fps = {issue_fingerprint(i) for i in issues}
+    resolved_count = 0
+    for fp, v in notified.items():
+        if isinstance(v, dict) and not v.get("acknowledged") and not v.get("pending"):
+            if fp not in current_fps:
+                v["acknowledged"] = True
+                v["resolved_date"] = now.strftime("%Y-%m-%d")
+                resolved_count += 1
+    if resolved_count:
+        print(f"Auto-resolved {resolved_count} issue(s) no longer appearing in audit.\n")
+
     # Build user ID lookup
     users        = fetch_all_users()
     name_to_uid  = {
@@ -870,7 +903,7 @@ def main():
         # so they never trigger a sterner tone
         strike_counts = {
             iss.category: (0 if iss.category in PENDING_CATEGORIES
-                           else _get_strike_count(worker_name, iss.category, notified))
+                           else _get_strike_count(worker_name, iss.category))
             for iss in worker_issues
         }
         max_strike = max(
@@ -905,11 +938,18 @@ def main():
                         "category": iss.category, "client": iss.client or "",
                         "pending": iss.category in PENDING_CATEGORIES,
                     }
+                # Write to 30-day strike log before counting repeats
+                notifiable_cats = [
+                    iss.category for iss in worker_issues
+                    if iss.category not in PENDING_CATEGORIES
+                ]
+                _append_strikes(worker_name, notifiable_cats, now.strftime("%Y-%m-%d"))
+
                 # Repeat offender alert to CC Management (3rd+ strike)
                 repeat_cats = [cat for cat, count in strike_counts.items() if count >= 2]
                 if repeat_cats:
                     repeat_msg = (
-                        f"⚠️ Repeat offender — {worker_name} has been flagged 3+ times for: "
+                        f"Repeat offender — {worker_name} has been flagged 3+ times for: "
                         f"{', '.join(repeat_cats)}. Amy has sent a firm message. Consider a formal warning."
                     )
                     post_to_management(repeat_msg)
