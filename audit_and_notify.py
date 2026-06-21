@@ -193,59 +193,74 @@ def build_worker_message(worker_name: str, issues: list, strike_counts: dict = N
     first = worker_name.split()[0]
     strike_counts = strike_counts or {}
 
+    # Prioritise: CRITICAL first, then HIGH, cap at 3 so the message isn't a wall of issues
+    sorted_issues = sorted(issues, key=lambda i: (0 if i.severity == "CRITICAL" else 1 if i.severity == "HIGH" else 2))
+    top_issues    = sorted_issues[:3]
+    overflow      = len(issues) - len(top_issues)
+
     issue_lines = []
-    for iss in issues[:10]:
+    for iss in top_issues:
         strike = strike_counts.get(iss.category, 0)
         strike_note = f" [3rd+ offence]" if strike >= 2 else f" [2nd offence]" if strike == 1 else ""
         issue_lines.append(f"- [{iss.severity}]{strike_note} {iss.category} | {iss.client or 'N/A'} | {iss.date or 'N/A'}: {iss.detail}")
-    if len(issues) > 10:
-        issue_lines.append(f"({len(issues) - 10} additional issues not listed)")
+    if overflow:
+        issue_lines.append(f"({overflow} further issue(s) — address these first, then I'll follow up)")
     issues_block = "\n".join(issue_lines)
 
-    max_strikes = max(strike_counts.values()) if strike_counts else 0
+    has_critical  = any(i.severity == "CRITICAL" for i in top_issues)
+    max_strikes   = max((strike_counts.get(i.category, 0) for i in top_issues), default=0)
+
     if max_strikes >= 2:
         tone_instruction = (
             "This worker has been flagged for the same issue 3 or more times. "
-            "The tone should be firm and direct — make clear this is serious and needs to stop. "
-            "Still no corporate language, but drop the casual friendliness. No threats, but no softening either."
+            "Be direct and clear that this pattern needs to stop — name the fact that it's happened again. "
+            "No corporate language, but drop the softness. No threats, just firmness. "
+            "Example: 'Abdi, this is the third time now I've had to flag a late incident report. That's not okay — these need to go in within 30 minutes of the shift ending, every time.'"
         )
     elif max_strikes == 1:
         tone_instruction = (
-            "This worker has been flagged for the same issue before. "
-            "Acknowledge this is a repeat and be a bit more direct than the first time."
+            "This worker has been flagged for this before. Acknowledge it's a repeat — briefly, not harshly. "
+            "Example: 'Hey, this one's come up before — just want to make sure we get it sorted this time.'"
         )
     else:
-        tone_instruction = "Friendly and casual — first time flagging these issues."
+        tone_instruction = "Casual and curious — first time flagging these issues. Lead with a question where the cause is unclear (GPS, late clock-in, short shift). Be direct where the cause is obvious (no clock-in at all, no notes at all)."
 
     history_block = _format_history(history, first)
     history_section = f"\nRecent conversation with {first}:\n{history_block}\n" if history_block else ""
     opener_rule = (
         f"- Do NOT open with 'Hi {first},' — there's an ongoing conversation above, pick up the thread naturally."
-        if history_block else f"- Start with 'Hi {first},'"
+        if history_block else f"- Start with 'Hey {first},' (casual, not 'Hi')"
+    )
+    deadline_rule = (
+        "- This is urgent — ask them to reply today."
+        if has_critical else
+        "- No hard deadline — just ask them to get back to you when they can today. Do NOT say '5 PM'."
     )
 
     if ANTHROPIC_API_KEY:
         try:
             import anthropic
             client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-            prompt = f"""You are Amy, a coordinator at Connect Care. Write a short text to {first} about issues from their shifts.
+            prompt = f"""You are Amy, a coordinator at Connect Care. Write a short text message to {first} about issues from their recent shifts.
 {history_section}
-Issues to raise:
+Issues to raise (most serious listed first):
 {issues_block}
 
 Tone guidance: {tone_instruction}
 
 Rules:
 {opener_rule}
-- Write like you're texting a colleague — short, straight to the point
-- Don't repeat anything already covered in the conversation above
-- Use the client's name naturally (e.g. "at Kallan's", "at Joshua's place")
-- Use the actual day (e.g. "on Sunday", "yesterday")
+- Write like a real person texting — short, warm but direct
+- For ambiguous issues (GPS mismatch, short shift, late clock-in): open with a genuine question — "where were you when you clocked in?" not a statement of wrongdoing
+- For clear-cut issues (no clock-in at all, no notes submitted): be direct — "did you work that shift?" or "I've got no notes from that shift"
+- Use the client's name naturally ("at Kallan's", "at Joshua's place") and the actual day ("on Tuesday", "yesterday")
+- Raise at most 2–3 things — if there are more, focus on the most serious and say you'll follow up on the rest
 - Zero corporate language — no "identified", "compliance", "noted", "I am writing", "please be advised", "regarding"
-- No sign-off
-- If the issue is missing notes or forms, remind them these need to be done within 30 minutes of the shift ending — casual, not a lecture
-- ONLY reference issues explicitly listed above — do not add, infer, or mention anything that is not in the list (no "a few of your shifts", no roster speculation, no general reminders beyond what's listed)
-- Output just the message, nothing else"""
+- No sign-off, no closing line
+- If the issue is missing notes or forms: remind them it needs to be done within 30 mins of the shift ending — casual, not a lecture
+- ONLY reference issues explicitly listed above — do not add, infer, or mention anything not in the list
+{deadline_rule}
+- Output just the message text, nothing else"""
 
             resp = client.messages.create(
                 model="claude-haiku-4-5",
@@ -532,12 +547,19 @@ def check_unacknowledged_escalations(now: datetime.datetime, notified: dict, dry
         sender_id = int(CONNECTEAM_SENDER_ID or "0")
         conv_map  = load_worker_conversations() if not dry_run else {}
         for wname, info in needs_24h_followup.items():
-            first = wname.split()[0]
-            uid   = info["uid"]
-            msg   = (
-                f"Hey {first}, just following up on the message I sent yesterday — "
-                f"still waiting to hear back from you on {', '.join(info['cats'][:2])}. "
-                f"Can you get back to me today?"
+            first     = wname.split()[0]
+            uid       = info["uid"]
+            top_cat   = info["cats"][0] if info["cats"] else "the issue I flagged"
+            # Rephrase the category into plain English for the follow-up
+            cat_plain = (
+                top_cat.lower()
+                .replace("no clock-in", "missing clock-in")
+                .replace("_", " ")
+            )
+            msg = (
+                f"{first} — I messaged you yesterday and haven't heard back. "
+                f"This one's important, I need a reply from you today. "
+                f"It's about the {cat_plain} — what happened?"
             )
             if dry_run:
                 print(f"  [DRY RUN] 24h follow-up to {wname}: {msg[:100]}")
@@ -585,27 +607,30 @@ def check_unacknowledged_escalations(now: datetime.datetime, notified: dict, dry
         return
 
     print(f"\n48h escalation: {len(needs_48h_escalate)} worker(s) still unresponsive.")
-    lines = ["⚠️ 48-hour no-reply escalation — manager action required:\n"]
+    # Send a separate, actionable message per worker so each one is easy to act on
     for wname, cats in needs_48h_escalate.items():
-        lines.append(f"• {wname} — {', '.join(cats[:3])} — no reply in 48h")
-    lines.append("\nPlease follow up with each worker directly.")
-    msg = "\n".join(lines)
-
-    if not dry_run:
-        sender_id = int(CONNECTEAM_SENDER_ID or "0")
-        if sender_id and CONNECTEAM_API_KEY:
-            try:
-                requests.post(
-                    f"https://api.connecteam.com/chat/v1/conversations/{CC_MGMT_CONV_ID}/message",
-                    headers={"X-API-KEY": CONNECTEAM_API_KEY, "Content-Type": "application/json"},
-                    json={"senderId": sender_id, "text": msg[:4000]},
-                    timeout=15,
-                )
-                print("  Posted 48h escalation to CC Management.")
-            except Exception as e:
-                print(f"  [ERROR] Failed to post escalation: {e}")
-    else:
-        print(f"  [DRY RUN] Would post: {msg[:200]}")
+        top_cat   = cats[0] if cats else "a compliance issue"
+        cat_plain = top_cat.lower().replace("_", " ")
+        msg = (
+            f"{wname} hasn't replied to Amy's messages in over 48 hours. "
+            f"The flagged issue is: {cat_plain}. "
+            f"Can someone give them a call and sort this out directly?"
+        )
+        if not dry_run:
+            sender_id = int(CONNECTEAM_SENDER_ID or "0")
+            if sender_id and CONNECTEAM_API_KEY:
+                try:
+                    requests.post(
+                        f"https://api.connecteam.com/chat/v1/conversations/{CC_MGMT_CONV_ID}/message",
+                        headers={"X-API-KEY": CONNECTEAM_API_KEY, "Content-Type": "application/json"},
+                        json={"senderId": sender_id, "text": msg},
+                        timeout=15,
+                    )
+                    print(f"  Posted 48h escalation for {wname}.")
+                except Exception as e:
+                    print(f"  [ERROR] Failed to post escalation for {wname}: {e}")
+        else:
+            print(f"  [DRY RUN] Would post: {msg}")
 
     for fp, v in notified.items():
         if isinstance(v, dict) and not v.get("acknowledged") and v.get("worker") in needs_48h_escalate:
@@ -811,15 +836,54 @@ def main():
 
     # ── Auto-resolve: mark notified issues as resolved if they're no longer flagged ──
     current_fps = {issue_fingerprint(i) for i in issues}
-    resolved_count = 0
+    resolved_by_worker = defaultdict(list)  # worker_name -> [category, ...]
     for fp, v in notified.items():
         if isinstance(v, dict) and not v.get("acknowledged") and not v.get("pending"):
             if fp not in current_fps:
                 v["acknowledged"] = True
                 v["resolved_date"] = now.strftime("%Y-%m-%d")
-                resolved_count += 1
-    if resolved_count:
-        print(f"Auto-resolved {resolved_count} issue(s) no longer appearing in audit.\n")
+                resolved_by_worker[v.get("worker", "")].append(v.get("category", ""))
+
+    if resolved_by_worker:
+        print(f"Auto-resolved issues for {len(resolved_by_worker)} worker(s) — sending close-the-loop messages.\n")
+        sender_id = int(CONNECTEAM_SENDER_ID or "0")
+        conv_map  = load_worker_conversations() if not dry_run else {}
+        # Re-use the already-loaded users dict after it's built below — build it now
+        _resolve_users = fetch_all_users()
+        _resolve_uid_map = {
+            f"{u.get('firstName','')} {u.get('lastName','')}".strip(): uid
+            for uid, u in _resolve_users.items()
+        }
+        for wname, cats in resolved_by_worker.items():
+            if not wname:
+                continue
+            uid = _resolve_uid_map.get(wname)
+            if not uid:
+                continue
+            first = wname.split()[0]
+            msg   = f"Hey {first}, looks like that's all sorted now — appreciate you getting on it."
+            if dry_run:
+                print(f"  [DRY RUN] Close-the-loop to {wname}: {msg}")
+                continue
+            if not sender_id or not CONNECTEAM_API_KEY:
+                continue
+            conv_id = conv_map.get(str(uid))
+            sent = False
+            if conv_id:
+                try:
+                    r = requests.post(
+                        f"{BASE_URL}/chat/v1/conversations/{conv_id}/message",
+                        headers={"X-API-KEY": CONNECTEAM_API_KEY, "Content-Type": "application/json"},
+                        json={"senderId": sender_id, "text": msg},
+                        timeout=15,
+                    )
+                    sent = r.ok
+                except Exception:
+                    pass
+            if sent:
+                print(f"  ✓ Close-the-loop sent to {wname}")
+            else:
+                print(f"  ✗ Close-the-loop failed for {wname}")
 
     # Build user ID lookup
     users        = fetch_all_users()
