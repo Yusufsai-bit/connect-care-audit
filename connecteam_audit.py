@@ -1439,7 +1439,7 @@ def run_audit(days_back=7, start_override=None, end_override=None, worker_id_fil
                 issues.append(Issue("HIGH", "SUSPICIOUSLY SHORT SHIFT", name, client, dlabel,
                     f"Shift lasted only {round(duration_min)} min "
                     f"({ts_aest(clock_in).strftime('%H:%M')}–{ts_aest(clock_out).strftime('%H:%M')}) "
-                    "-- possible clock error or fraudulent entry."))
+                    "-- possible clock error or accidental double clock-in."))
 
             # Break compliance (Fair Work Act)
             duration_hours = duration_min / 60
