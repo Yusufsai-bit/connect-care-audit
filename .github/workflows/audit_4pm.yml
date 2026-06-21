@@ -45,7 +45,7 @@ jobs:
         run: |
           git config user.name  "Connect Care Bot"
           git config user.email "bot@connectcare.com.au"
-          git add notified_issues.json amy_conversation_log.json worker_profiles.json
+          git add notified_issues.json amy_conversation_log.json worker_profiles.json strike_log.json
           git diff --cached --quiet || git commit -m "chore: update audit state 5pm $(date +'%Y-%m-%d') [skip ci]"
           git pull --rebase origin main
           git push
