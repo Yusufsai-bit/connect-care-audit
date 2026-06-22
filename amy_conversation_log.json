@@ -16,8 +16,8 @@
     "messages": [
       {
         "sender": "amy",
-        "text": "Thanks for getting back to me! Just a couple other things that popped up:\n\nSo on Wednesday and Thursday last week (17th & 18th), the system auto-closed your shifts at Kallan's at 15:10 both days. Just make sure you're clocking out manually before you leave \u2014 otherwise it can mess with the hours logged.\n\nAlso on Wednesday, the incident report you filed needs a bit more detail. Right now it just says \"Behavioural\" but NDIS needs enough info to actually understand what happened. And we're also missing who you notified after \u2014 whether that's the family, guardian, or whoever. Can you add those in?\n\nOne more thing \u2014 you've clocked 17.3 hours this period but were only rostered for 12. That extra 5.3 hours needs to be authorised before we can bill it, so just double-check with your manager on that.\n\nOh, and I see you've got three pending shift amendments in (Wed, Thu, Fri). They've come through fine \u2014 just sitting in the queue for approval. No action needed from you, just wanted you to know they're being looked at.",
-        "ts": 1781847665
+        "text": "Hey Ali \u2014 just following up on a few things from last week. So the system auto-closed your shifts at Kallan's on the 17th and 18th \u2014 were you clocking out manually before you left, or did that slip? Just want to make sure we've got your hours right.\n\nAlso, that incident report from Wednesday needs a bit more detail for NDIS \u2014 right now it just says \"Behavioural\" but they need to actually understand what happened. Can you add some notes on that and who you notified after (family, guardian, etc)? Should ideally be within 30 mins of the shift ending but let me know when you can get to it.\n\nOne more thing \u2014 you've clocked 17.3 hours this period but were only rostered for 12. Just double-check with your manager about getting that extra 5.3 hours authorised so we can bill it properly.\n\nOh and your shift amendments for Wed, Thu, Fri have come through fine \u2014 just sitting in the queue for approval, no action needed from you.\n\nCan you get back to me on the clock-outs and that incident report when you get a sec?",
+        "ts": 1782107435
       }
     ]
   },
@@ -38,8 +38,8 @@
     "messages": [
       {
         "sender": "amy",
-        "text": "Hey! So I saw you clocked out early on Friday at Nada Haliem's \u2014 left at 14:09 but were scheduled until 16:00. What happened there?\n\nAlso just wanted to let you know we've got your shift amendment from that day and it's pending review. No need to do anything else on your end, we're looking into it",
-        "ts": 1782020615
+        "text": "So just following up on something \u2014 I'm seeing you clocked 6.4 hours across your shifts this period but you were only rostered for 5 hours. Are those extra hours all approved? Need to make sure before we bill anything out.\n\nAlso got your shift amendment notes from Nada Haliem's on the 22nd \u2014 they're in the system and pending review on our end. Nothing else you need to do there \ud83d\udc4d",
+        "ts": 1782107435
       }
     ]
   },
@@ -60,8 +60,8 @@
     "messages": [
       {
         "sender": "amy",
-        "text": "Just one more thing \u2014 you've also got a shift amendment pending for Evan Gatt on Saturday the 20th. Your notes are in and being reviewed, so nothing else you need to do on that one either.",
-        "ts": 1781931910
+        "text": "Actually quick question \u2014 Evan clocked out at 11:16 on Saturday the 20th but was scheduled til 2. Do you know what happened there? That's a pretty early finish.\n\nAlso got Joshua down as clocking in at 10:25 on Monday the 22nd with no shift on the roster for that time \u2014 did he work that one? And separately, his amendment notes came through and are being reviewed, so he's all set on that front.\n\nCan you get back to me on those today?",
+        "ts": 1782107435
       }
     ]
   },
@@ -71,8 +71,8 @@
     "messages": [
       {
         "sender": "amy",
-        "text": "Hey, couple more things to sort out actually.\n\nYou didn't clock in at all for Kallan's on Wednesday (15:00\u201321:00 shift) \u2014 need you to make sure you're clocking in for every shift you work.\n\nSame with Joshua's on Thursday morning (09:00\u201314:00) \u2014 that one never got clocked in either.\n\nAlso, there's an incident report you filed for Kallan's on Wednesday that needs more detail. Right now it just says \"Training cancelled\" but we need enough info to actually understand what happened \u2014 NDIS needs that.\n\nAnd on that same report, we need to know who was notified about it (like a guardian or family member). Can you add that in when you get a chance?",
-        "ts": 1781847665
+        "text": "Hey, just noticed a few things we need to sort out quick.\n\nDid you work the shift at Kallan's on Sunday (21 June, 09:00\u201315:00)? You never clocked in for that one.\n\nAlso missing clock-ins for Wednesday at Kallan's (15:00\u201321:00) and Thursday morning at Joshua's (09:00\u201314:00) \u2014 need you clocking in for every shift you work so we've got the record.\n\nAnd that incident report you filed for Kallan's on Wednesday \u2014 it just says \"Training cancelled\" but NDIS needs more detail about what actually happened. Also need to know who you notified about it (guardian, family member, whoever). Can you fill those in today?",
+        "ts": 1782107435
       }
     ]
   },
@@ -82,8 +82,8 @@
     "messages": [
       {
         "sender": "amy",
-        "text": "Hey Abdul \u2014 just following up on those incident reports from Thursday and Friday at Evan Gatt's place. You filed them both but the descriptions are basically blank \u2014 just his name. NDIS needs way more detail about what actually happened, plus who was there and who you told about it. Can you add those notes in when you get a sec? They're meant to go in within 30 mins of the shift ending so we can get them processed properly.\n\nAlso got your shift amendments from Wed, Thurs, and Fri \u2014 they've come through and are being reviewed, so nothing you need to do there.\n\nLet me know once you've updated those incident reports \ud83d\udc4d",
-        "ts": 1782020615
+        "text": "So just following up \u2014 the incident reports from Thursday and Friday at Evan's still need proper notes in them. NDIS needs actual details about what happened, who was there, all that. Remember those are meant to go in within 30 mins of the shift ending so we can process them properly. Can you add those in when you get a chance?\n\nAlso got a couple things that came up from your recent shifts \u2014 you clocked in 79 mins late on Sunday at Evan's (scheduled 9am, showed up at 10:18). What happened there?\n\nAnd just checking on your hours across this period \u2014 you've got 6.9 hours clocked but only 5 hours rostered, so there's an extra 1.9 hours there. Are all those extra hours meant to be billed?\n\nLet me know when you've sorted the incident reports and we can chat through the rest \ud83d\udc4d",
+        "ts": 1782107435
       }
     ]
   },
