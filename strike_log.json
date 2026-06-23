@@ -53,5 +53,50 @@
     "worker": "Roja Mehmood",
     "category": "NO CLOCK-IN",
     "date": "2026-06-22"
+  },
+  {
+    "worker": "Abdi Rahman",
+    "category": "NO CLOCK-IN",
+    "date": "2026-06-23"
+  },
+  {
+    "worker": "Abdi Rahman",
+    "category": "NO CLOCK-IN",
+    "date": "2026-06-23"
+  },
+  {
+    "worker": "Ali Saaram",
+    "category": "INCIDENT REPORT \u2014 DESCRIPTION TOO BRIEF",
+    "date": "2026-06-23"
+  },
+  {
+    "worker": "Ali Saaram",
+    "category": "INCIDENT REPORT \u2014 MISSING WITNESS/NOTIFICATION",
+    "date": "2026-06-23"
+  },
+  {
+    "worker": "Irfanullah Zamir",
+    "category": "AUTO CLOCK-OUT",
+    "date": "2026-06-23"
+  },
+  {
+    "worker": "Mohamed Liban",
+    "category": "NO CLOCK-IN",
+    "date": "2026-06-23"
+  },
+  {
+    "worker": "Mohamed Liban",
+    "category": "AUTO CLOCK-OUT",
+    "date": "2026-06-23"
+  },
+  {
+    "worker": "Roja Mehmood",
+    "category": "NO CLOCK-IN",
+    "date": "2026-06-23"
+  },
+  {
+    "worker": "Roja Mehmood",
+    "category": "NO CLOCK-IN",
+    "date": "2026-06-23"
   }
 ]
