@@ -16,8 +16,8 @@
     "messages": [
       {
         "sender": "amy",
-        "text": "So the incident report from Tuesday at Kallan's \u2014 I've got it down as Entry #342 but NDIS needs way more detail than \"Behaviour of Concern / Non-Compliance with House Rules\". Can you add some actual notes on what happened? Also need to know who you told after \u2014 like did you call the family or guardian? Ideally that should happen within 30 mins of your shift ending anyway.\n\nJust get back to me on that when you can today?",
-        "ts": 1782190409
+        "text": "Hey \u2014 so about that incident report from Tuesday at Kallan's, NDIS needs actual detail on what happened rather than just \"Behaviour of Concern\". Can you add some notes on what went down? Also did you call the family or guardian after? That should ideally happen within 30 mins of your shift ending.\n\nAlso just flagged your hours for this period \u2014 you've clocked 11.8h but you're only rostered for 6.0h. Can you double-check which extra hours were authorised before we process billing?\n\nGet back to me when you can today?",
+        "ts": 1782276774
       }
     ]
   },
@@ -38,8 +38,8 @@
     "messages": [
       {
         "sender": "amy",
-        "text": "So just following up on something \u2014 I'm seeing you clocked 6.4 hours across your shifts this period but you were only rostered for 5 hours. Are those extra hours all approved? Need to make sure before we bill anything out.\n\nAlso got your shift amendment notes from Nada Haliem's on the 22nd \u2014 they're in the system and pending review on our end. Nothing else you need to do there \ud83d\udc4d",
-        "ts": 1782107435
+        "text": "Quick question on the shift at Nada Haliem's on Monday the 22nd \u2014 you clocked out at 13:10 but were scheduled until 4? What happened there? Need to get that sorted today if you can",
+        "ts": 1782276774
       }
     ]
   },
@@ -49,8 +49,8 @@
     "messages": [
       {
         "sender": "amy",
-        "text": "Hey \u2014 just following up on Saturday at Kallan's. This one's come up before, so want to make sure we get it sorted this time. You were down for 15:00\u201321:00 but we've got no record of you clocking in at all. Did that shift end up happening? Also the system auto-closed at 15:10, so if you did work it just make sure you're manually clocking out from now on. And heads up \u2014 your shift amendment came through and the notes are in, just pending review on our end. Can you get back to me today on the clock-in thing?",
-        "ts": 1782190409
+        "text": "Just following up on Saturday at Kallan's \u2014 we've got no record of you clocking in for that 15:00 shift. Did that end up happening? Also your shift amendment notes came through and we're reviewing them now, so nothing else needed from your end on that one. Can you let me know about Saturday when you get a chance?",
+        "ts": 1782276774
       }
     ]
   },
@@ -60,8 +60,8 @@
     "messages": [
       {
         "sender": "amy",
-        "text": "Yeah so a couple things from the recent shifts \u2014 Evan clocked out at 11:16 on Saturday the 20th but was down for til 2, do you know what happened there? Early finish or something?\n\nAlso Joshua clocked in at 10:25 on Monday the 22nd but there's nothing on the roster for that time \u2014 did he actually work that one?\n\nCan you get back to me on those today when you get a sec?",
-        "ts": 1782190409
+        "text": "Yeah so I've looked into those for you \u2014 couple things with Joshua that need sorting.\n\nMonday the 22nd, he clocked in at 10:25 but left at 11:49 \u2014 so nearly 2.5 hours early when he was meant to be there til 2. This one's come up before so just want to make sure we get it sorted this time. What happened there?\n\nAlso Tuesday the 23rd is a bit messier \u2014 he was over 2 hours late clocking in (showed up at 11:05 when shift started at 9) and then clocked out early again at 12:22. \n\nCan you get back to me on what was going on with those shifts? Need to nail this down today if possible.",
+        "ts": 1782276774
       }
     ]
   },
@@ -93,8 +93,8 @@
     "messages": [
       {
         "sender": "amy",
-        "text": "Just caught a couple of things from your recent shifts \u2014 can we sort them out?\n\nFirst up, on Saturday the 20th, the system auto-clocked you out at 15:10, but there's no manual clock-out on file. Did you forget to clock out that day, or did something happen?\n\nAlso flagging that this period you've clocked 10 hours but were only rostered for 5 \u2014 that's a 5-hour difference. Can you double-check that all those extra hours got approved? Just need to verify before we bill.\n\nAnd FYI, we've got your amendment request for the 20th \u2014 notes came through fine, just sitting in the queue for our review. You're all set on your end.\n\nCan you get back to me when you've got a sec today?",
-        "ts": 1782020615
+        "text": "Hey \u2014 just caught a couple things from your shifts. The auto clock-out on the 23rd came up again \u2014 system force-closed at 17:10 but there's no manual clock-out on file. This one's come up before, just want to make sure we get it sorted this time. Did you clock out manually that day?\n\nAlso just a heads up \u2014 your amendment request for the 23rd is sitting in our queue. We've got your notes through fine, so you're all set on your end. We'll get it reviewed and back to you.\n\nCan you get back to me when you've got a sec today?",
+        "ts": 1782276774
       }
     ]
   },
