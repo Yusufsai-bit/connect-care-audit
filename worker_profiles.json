@@ -65,11 +65,9 @@
   },
   "2455370": {
     "worker_name": "Mohamed Liban",
-    "last_issue_date": "23 Jun 2026",
-    "last_issue_summary": "NO CLOCK-IN (Kallan Jordan); AUTO CLOCK-OUT (Kallan Jordan); PENDING AMENDMENT -- WORKER NOTICE (Kallan Jordan)",
-    "open_issues": [
-      "NO CLOCK-IN"
-    ]
+    "last_issue_date": "24 Jun 2026",
+    "last_issue_summary": "PENDING AMENDMENT -- WORKER NOTICE (Kallan Jordan); PENDING AMENDMENT -- WORKER NOTICE (Kallan Jordan); PENDING AMENDMENT -- WORKER NOTICE (Kallan Jordan)",
+    "open_issues": []
   },
   "14468881": {
     "worker_name": "Ahmed Yehia",
