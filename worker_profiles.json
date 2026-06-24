@@ -30,9 +30,12 @@
   },
   "2200746": {
     "worker_name": "Peter Eronmwon",
-    "last_issue_date": "23 Jun 2026",
-    "last_issue_summary": "PENDING AMENDMENT -- WORKER NOTICE (Joshua Gatt)",
-    "open_issues": []
+    "last_issue_date": "24 Jun 2026",
+    "last_issue_summary": "EARLY CLOCK-OUT (Joshua Gatt); LATE CLOCK-IN (Joshua Gatt); EARLY CLOCK-OUT (Joshua Gatt)",
+    "open_issues": [
+      "EARLY CLOCK-OUT",
+      "LATE CLOCK-IN"
+    ]
   },
   "2467746": {
     "worker_name": "Roja Mehmood",
