@@ -82,6 +82,13 @@ FORMS = {
     "Joshua: ABC Form":          15535225,
 }
 
+# All form IDs that constitute an "incident report" for frequency counting
+_INCIDENT_FORM_IDS = (
+    FORMS["Incident Report"],
+    FORMS["Kallan Incident Report"],
+    FORMS["Safety Hazard Report"],
+)
+
 # Peter Eronmwon's user ID (required for Michael medication check)
 PETER_USER_ID = 2200746
 
@@ -2091,7 +2098,9 @@ def run_audit(days_back=7, start_override=None, end_override=None, worker_id_fil
     def period_incident_count_for_client(title_keyword):
         workers = workers_for_client(title_keyword)
         return sum(
-            1 for s in fetch_form_submissions(FORMS["Incident Report"])
+            1
+            for form_id in _INCIDENT_FORM_IDS
+            for s in fetch_form_submissions(form_id)
             if s.get("submissionTimestamp", 0) >= start_ts
             and s.get("submittingUserId") in workers
         )
