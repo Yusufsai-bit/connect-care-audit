@@ -321,6 +321,40 @@ def main():
 
     post_to_management(full_msg)
 
+    # ── Invoice audit section (Fix #7) ────────────────────────────────────────
+    try:
+        from invoice_check import reconcile, build_report, current_pay_period
+        start_date, end_date = current_pay_period()
+        print(f"\nRunning invoice audit for {start_date} – {end_date}...")
+        inv_results = reconcile(start_date, end_date)
+        flagged     = [r for r in inv_results if r["flags"]]
+        if flagged:
+            inv_report = build_report(inv_results, start_date, end_date)
+            inv_header = f"Invoice Reconciliation — {start_date} to {end_date}\n{'─' * 50}\n\n"
+            post_to_management(inv_header + inv_report)
+            print(f"Invoice audit: {len(flagged)} worker(s) flagged — posted to CC Management.")
+        else:
+            post_to_management(
+                f"Invoice check ({start_date} – {end_date}): all workers clear — no billing discrepancies found."
+            )
+            print("Invoice audit: all workers clear.")
+    except Exception as e:
+        print(f"  [WARN] Invoice audit skipped: {e}")
+
+    # ── Manager capability reminder (Fix #6) — posted with every weekly digest ──
+    reminder = (
+        "💡 Reminder — you can ask me things directly in this chat:\n"
+        "• \"who's clocked in today\" — live clock-in status\n"
+        "• \"show me this week's timesheet\" — hours by worker\n"
+        "• \"any shifts tomorrow\" — upcoming roster\n"
+        "• \"any time-off requests pending\" — leave approvals\n"
+        "• \"run invoice audit\" — flag billing discrepancies for current pay period\n"
+        "• \"audit [worker name]'s invoice\" — check a specific worker\n"
+        "I pull from Connecteam in real time so answers are current."
+    )
+    post_to_management(reminder)
+    print("Amy capability reminder posted.")
+
     print(f"\n{'='*60}")
     print("Weekly digest done.")
     print(f"{'='*60}\n")
