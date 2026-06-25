@@ -1111,18 +1111,22 @@ def assess_incident_reports_with_claude(reports_batch):
         for r in reports_batch
     ], indent=2)
 
-    prompt = f"""You are a senior NDIS compliance auditor reviewing incident report descriptions written by support workers.
+    prompt = f"""You are a senior NDIS compliance auditor reviewing incident reports written by support workers.
 
-Evaluate each description against the NDIS Incident Management and Reportable Incidents Rules 2018.
+The "text" field for each report contains ALL text answers from the form, labelled by question.
+Evaluate the report AS A WHOLE across all answers — do not penalise a worker for missing detail
+in one field if that detail is present in another field of the same report.
 
-A compliant incident report description must:
+Evaluate each report against the NDIS Incident Management and Reportable Incidents Rules 2018.
+
+A compliant incident report must (across all its fields combined):
 - Describe what happened factually and objectively (no opinions)
 - Include enough detail to reconstruct the event (who, what, when, where)
 - Describe the participant's condition or behaviour before and after
 - Describe the support worker's response and actions taken
 - Use clear, plain English
 
-Incident report descriptions to evaluate:
+Incident reports to evaluate:
 {payload}
 
 For EACH description return a JSON object with:
@@ -1791,14 +1795,17 @@ def run_audit(days_back=7, start_override=None, end_override=None, worker_id_fil
             else:
                 dlabel = sub_dt.strftime("%a %d-%b")
 
-            # Completeness -- free-text description present and substantive?
-            desc_text = ""
+            # Completeness -- collect ALL text fields from the form, not just the first.
+            # Incident forms have separate questions for "what happened", "worker response",
+            # "participant condition" etc — reading only the first field causes false negatives.
+            text_parts = []
             for a in answers:
                 if a.get("questionType") in ("freeText", "openEnded"):
-                    val = str(a.get("value", a.get("freeText", ""))).strip()
+                    label = str(a.get("questionText") or a.get("label") or "").strip()
+                    val   = str(a.get("value", a.get("freeText", ""))).strip()
                     if val:
-                        desc_text = val
-                        break
+                        text_parts.append(f"{label}: {val}" if label else val)
+            desc_text = "\n".join(text_parts)
 
             if not desc_text:
                 issues.append(Issue("CRITICAL", "INCOMPLETE INCIDENT REPORT",
