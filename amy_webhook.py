@@ -35,6 +35,7 @@ import hmac
 import hashlib
 import math
 import time
+import random
 import base64
 import logging
 import re
@@ -73,6 +74,11 @@ CLIENT_GPS_OVERRIDES = {
 
 QUIET_START = 19   # 7 PM AEST — no worker messages after this hour
 QUIET_END   = 6    # 6 AM AEST — no worker messages before this hour
+
+# Reply delay — makes Amy feel human, not like an instant bot.
+# Applied to all normal worker replies; safety-critical messages bypass this.
+AMY_REPLY_DELAY_MIN = 120   # seconds (2 min)
+AMY_REPLY_DELAY_MAX = 270   # seconds (4.5 min)
 
 # Tier 1 — any single keyword is enough to trigger emergency response
 _SAFETY_CRITICAL = {
@@ -2382,6 +2388,9 @@ def handle_chat_reply(data):
                 wid      = relay["worker_id"]
                 wname    = relay["worker_name"]
                 composed = compose_from_guidance(wname, text, relay["reply"], relay.get("issues", []))
+                relay_delay = random.randint(60, 120)
+                logger.info(f"Relay reply ready for {wname} — waiting {relay_delay}s before sending")
+                time.sleep(relay_delay)
                 _worker_send(wid, composed)
                 append_to_conversation(wid, "amy", composed)
                 logger.info(f"Amy sent composed response to {wname} based on manager guidance")
@@ -2445,6 +2454,9 @@ def handle_chat_reply(data):
                 f"URGENT Connect Care: {worker} reported — \"{text[:160]}\". Check Connecteam now.")
         logger.warning(f"[SAFETY CRITICAL] {worker}: '{text[:100]}' — manager alerted via SMS + CC Management")
     elif amy_reply and SENDER_ID and CONNECTEAM_API_KEY:
+        delay_s = random.randint(AMY_REPLY_DELAY_MIN, AMY_REPLY_DELAY_MAX)
+        logger.info(f"Reply ready for {worker} — waiting {delay_s}s before sending")
+        time.sleep(delay_s)
         _worker_send(user_id, amy_reply, force=False)
         append_to_conversation(user_id, "amy", amy_reply)
         logger.info(f"Amy replied ({'holding' if is_complex else 'closed'}): '{amy_reply[:80]}'")
