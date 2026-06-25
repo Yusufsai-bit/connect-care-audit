@@ -133,5 +133,105 @@
     "worker": "Peter Eronmwon",
     "category": "LATE CLOCK-IN",
     "date": "2026-06-24"
+  },
+  {
+    "worker": "Abdi Rahman",
+    "category": "NO CLOCK-IN",
+    "date": "2026-06-25"
+  },
+  {
+    "worker": "Abdi Rahman",
+    "category": "GPS MISMATCH",
+    "date": "2026-06-25"
+  },
+  {
+    "worker": "Abdi Rahman",
+    "category": "GPS MISMATCH",
+    "date": "2026-06-25"
+  },
+  {
+    "worker": "Abdi Rahman",
+    "category": "GPS MISMATCH",
+    "date": "2026-06-25"
+  },
+  {
+    "worker": "Abdi Rahman",
+    "category": "GPS MISMATCH",
+    "date": "2026-06-25"
+  },
+  {
+    "worker": "Abdi Rahman",
+    "category": "SUSPICIOUSLY SHORT SHIFT",
+    "date": "2026-06-25"
+  },
+  {
+    "worker": "Abdi Rahman",
+    "category": "SUSPICIOUSLY SHORT SHIFT",
+    "date": "2026-06-25"
+  },
+  {
+    "worker": "Abdi Rahman",
+    "category": "SUSPICIOUSLY SHORT SHIFT",
+    "date": "2026-06-25"
+  },
+  {
+    "worker": "Abdi Rahman",
+    "category": "SUSPICIOUSLY SHORT SHIFT",
+    "date": "2026-06-25"
+  },
+  {
+    "worker": "Abdi Rahman",
+    "category": "UNSCHEDULED SHIFT",
+    "date": "2026-06-25"
+  },
+  {
+    "worker": "Abdi Rahman",
+    "category": "UNSCHEDULED SHIFT",
+    "date": "2026-06-25"
+  },
+  {
+    "worker": "Abdi Rahman",
+    "category": "UNSCHEDULED SHIFT",
+    "date": "2026-06-25"
+  },
+  {
+    "worker": "Abdi Rahman",
+    "category": "UNSCHEDULED SHIFT",
+    "date": "2026-06-25"
+  },
+  {
+    "worker": "Ali Saaram",
+    "category": "AUTO CLOCK-OUT",
+    "date": "2026-06-25"
+  },
+  {
+    "worker": "Hajar El Hassan",
+    "category": "OVERBILLING RISK -- HOURS EXCEED ROSTER",
+    "date": "2026-06-25"
+  },
+  {
+    "worker": "Mohamed Liban",
+    "category": "EARLY CLOCK-OUT",
+    "date": "2026-06-25"
+  },
+  {
+    "worker": "Mohamed Liban",
+    "category": "AUTO CLOCK-OUT",
+    "date": "2026-06-25"
+  },
+  {
+    "worker": "Mohamed Liban",
+    "category": "OVERBILLING RISK -- HOURS EXCEED ROSTER",
+    "date": "2026-06-25"
+  },
+  {
+    "worker": "Roja Mehmood",
+    "category": "NO CLOCK-IN",
+    "date": "2026-06-25"
+  },
+  {
+    "worker": "Roja Mehmood",
+    "category": "NO CLOCK-IN",
+    "date": "2026-06-25"
   }
 ]
