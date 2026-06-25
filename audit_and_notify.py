@@ -132,7 +132,15 @@ def load_notified() -> dict:
     try:
         with open(NOTIFIED_FILE, "r", encoding="utf-8") as f:
             raw = json.load(f)
-        return {k: v for k, v in raw.items() if v.get("date", "9999") >= cutoff}
+        # Fix #1: purge epoch-0 legacy entries (sent_ts=0 means timestamp was never set)
+        cleaned = {
+            k: v for k, v in raw.items()
+            if v.get("date", "9999") >= cutoff and v.get("sent_ts", 1) != 0
+        }
+        purged = len(raw) - len(cleaned)
+        if purged:
+            print(f"  [cleanup] Purged {purged} entries with invalid timestamps from dedup cache.")
+        return cleaned
     except Exception:
         return {}
 
@@ -803,6 +811,58 @@ def run_declining_notes(now: datetime.datetime, notified: dict,
     return messaged
 
 
+# ── Client-level risk rollup ──────────────────────────────────────────────────
+
+def _post_client_risk_summary(issues: list, now: datetime.datetime, dry_run: bool):
+    """Alert CC Management when a single client has 3+ issues from 2+ different workers today."""
+    by_client = defaultdict(lambda: defaultdict(list))
+    for iss in issues:
+        if not iss.client or iss.client.lower() in {"(team)", "unknown", ""}:
+            continue
+        if iss.severity not in {"CRITICAL", "HIGH"}:
+            continue
+        by_client[iss.client][iss.worker].append(iss)
+
+    alerts = [
+        (client, workers_map)
+        for client, workers_map in by_client.items()
+        if sum(len(v) for v in workers_map.values()) >= 3 and len(workers_map) >= 2
+    ]
+
+    if not alerts:
+        return
+
+    for client, workers_map in alerts:
+        total = sum(len(v) for v in workers_map.values())
+        lines = [f"⚠️ Client risk — {client}: {total} issues across {len(workers_map)} workers today."]
+        for worker, worker_issues in sorted(workers_map.items()):
+            cats = ", ".join(i.category for i in worker_issues[:3])
+            lines.append(f"  • {worker}: {cats}")
+        msg = "\n".join(lines)
+        print(f"  Client risk alert: {client} ({total} issues, {len(workers_map)} workers)")
+        if not dry_run:
+            post_to_management(msg)
+        else:
+            print(f"  [DRY RUN] {msg}")
+
+
+# ── GPS pattern counter ────────────────────────────────────────────────────────
+
+def _count_gps_mismatches(worker_name: str, client: str, notified: dict) -> int:
+    """Count GPS mismatch notifications for this worker+client in the last 30 days."""
+    cutoff_ts = (datetime.datetime.now(AEST) - datetime.timedelta(days=30)).timestamp()
+    count = 0
+    for v in notified.values():
+        if not isinstance(v, dict):
+            continue
+        if (v.get("worker") == worker_name
+                and v.get("category") == "GPS MISMATCH"
+                and v.get("client") == client
+                and v.get("sent_ts", 0) >= cutoff_ts):
+            count += 1
+    return count
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
@@ -985,7 +1045,7 @@ def main():
             sent_ok.append(worker_name)
             for iss in worker_issues:
                 fp = issue_fingerprint(iss)
-                notified[fp] = {"date": now.strftime("%Y-%m-%d"), "worker": worker_name, "category": iss.category, "client": iss.client or ""}
+                notified[fp] = {"date": now.strftime("%Y-%m-%d"), "worker": worker_name, "category": iss.category, "client": iss.client or "", "sent_ts": int(now.timestamp())}
         else:
             ok, result = send_worker_message(uid, message, worker_name=worker_name)
             if ok:
@@ -1009,7 +1069,7 @@ def main():
                 ]
                 _append_strikes(worker_name, notifiable_cats, now.strftime("%Y-%m-%d"))
 
-                # Repeat offender alert to CC Management (3rd+ strike)
+                # Repeat offender alert to CC Management (3rd+ strike per category)
                 repeat_cats = [cat for cat, count in strike_counts.items() if count >= 2]
                 if repeat_cats:
                     repeat_msg = (
@@ -1017,6 +1077,37 @@ def main():
                         f"{', '.join(repeat_cats)}. Amy has sent a firm message. Consider a formal warning."
                     )
                     post_to_management(repeat_msg)
+
+                # Strike threshold escalation (Fix #3): 5+ total strikes → formal review alert
+                STRIKE_ESCALATION_THRESHOLD = 5
+                total_30d_strikes = sum(1 for e in _load_strike_log() if e.get("worker") == worker_name)
+                if total_30d_strikes >= STRIKE_ESCALATION_THRESHOLD:
+                    esc_fp   = f"strike_esc|{worker_name}"
+                    week_ago = (now - datetime.timedelta(days=7)).strftime("%Y-%m-%d")
+                    if esc_fp not in notified or notified[esc_fp].get("date", "") < week_ago:
+                        post_to_management(
+                            f"🔴 High strike count — {worker_name} has accumulated "
+                            f"{total_30d_strikes} compliance strikes in the last 30 days. "
+                            f"Amy's messages alone aren't resolving this. Recommend a direct "
+                            f"management conversation or formal performance review."
+                        )
+                        notified[esc_fp] = {
+                            "date":     now.strftime("%Y-%m-%d"),
+                            "worker":   worker_name,
+                            "category": "strike_escalation",
+                            "sent_ts":  int(now.timestamp()),
+                        }
+
+                # GPS pattern annotation (Fix #5): include repeat GPS count in manager summary
+                gps_issues = [i for i in worker_issues if i.category == "GPS MISMATCH"]
+                for gps_iss in gps_issues:
+                    prior = _count_gps_mismatches(worker_name, gps_iss.client or "", notified)
+                    if prior >= 2:
+                        post_to_management(
+                            f"📍 GPS pattern — {worker_name} has now had {prior + 1} GPS mismatch "
+                            f"alerts at {gps_iss.client or 'same client'} in the last 30 days. "
+                            f"This is likely a consistent clock-in location issue worth investigating."
+                        )
 
                 # Unscheduled shift alert to CC Management
                 unscheduled = [i for i in worker_issues if i.category == "UNSCHEDULED SHIFT"]
@@ -1046,6 +1137,9 @@ def main():
 
     save_convo_log(convo_log)
 
+    # ── Client-level risk rollup (Fix #4) ────────────────────────────────────
+    _post_client_risk_summary(issues, now, dry_run)
+
     # ── Credential expiry notifications ───────────────────────────────────────
     cred_sent = []
     for worker_name, cred_issues in sorted(cred_new_issues.items()):
@@ -1067,7 +1161,7 @@ def main():
                 cred_sent.append(worker_name)
                 for iss in cred_issues:
                     fp = issue_fingerprint(iss)
-                    notified[fp] = {"date": now.strftime("%Y-%m-%d"), "worker": worker_name, "cred": True, "cred_type": iss.category, "category": iss.category, "client": iss.client or ""}
+                    notified[fp] = {"date": now.strftime("%Y-%m-%d"), "worker": worker_name, "cred": True, "cred_type": iss.category, "category": iss.category, "client": iss.client or "", "sent_ts": int(now.timestamp())}
             else:
                 print(f"  ✗ Credential notice failed for {worker_name}: {result}")
 
@@ -1107,7 +1201,7 @@ def main():
                 summary_lines.append(f"- {client}: {', '.join(cats)}")
         for iss in team_new_issues:
             fp = issue_fingerprint(iss)
-            notified[fp] = {"date": now.strftime("%Y-%m-%d"), "worker": iss.worker, "category": iss.category, "client": iss.client or "", "pending": iss.category in PENDING_CATEGORIES}
+            notified[fp] = {"date": now.strftime("%Y-%m-%d"), "worker": iss.worker, "category": iss.category, "client": iss.client or "", "pending": iss.category in PENDING_CATEGORIES, "sent_ts": int(now.timestamp())}
 
     has_issues = bool(sent_ok or sent_err or team_new_issues or cred_sent)
 
@@ -1133,18 +1227,28 @@ def main():
     if not dry_run:
         _add_critical_profile_notes(issues, name_to_uid, now)
 
-    # ── Invoice reconciliation (current pay period) ───────────────────────────
+    # ── Invoice reconciliation — once per pay period only (Fix #7 dedup) ────────
     try:
         from invoice_check import reconcile, build_report, current_pay_period
         start_date, end_date = current_pay_period()
-        inv_results  = reconcile(start_date, end_date)
-        flagged      = [r for r in inv_results if r["flags"]]
-        if flagged:
-            inv_report = build_report(inv_results, start_date, end_date)
-            post_to_management(inv_report)
-            print(f"Invoice reconciliation: {len(flagged)} worker(s) flagged — posted to CC Management.")
+        inv_fp = f"invoice_report|{start_date}|{end_date}"
+        if inv_fp in notified:
+            print("Invoice reconciliation: already posted for this pay period, skipping.")
         else:
-            print("Invoice reconciliation: all workers clear for current pay period.")
+            inv_results = reconcile(start_date, end_date)
+            flagged     = [r for r in inv_results if r["flags"]]
+            if flagged:
+                inv_report = build_report(inv_results, start_date, end_date)
+                post_to_management(inv_report)
+                notified[inv_fp] = {
+                    "date":     now.strftime("%Y-%m-%d"),
+                    "category": "invoice_report",
+                    "worker":   "(team)",
+                    "sent_ts":  int(now.timestamp()),
+                }
+                print(f"Invoice reconciliation: {len(flagged)} worker(s) flagged — posted.")
+            else:
+                print("Invoice reconciliation: all workers clear for current pay period.")
     except Exception as e:
         print(f"  [WARN] Invoice reconciliation skipped: {e}")
 
