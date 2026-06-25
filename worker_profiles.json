@@ -67,9 +67,11 @@
   },
   "2455370": {
     "worker_name": "Mohamed Liban",
-    "last_issue_date": "24 Jun 2026",
-    "last_issue_summary": "PENDING AMENDMENT -- WORKER NOTICE (Kallan Jordan); PENDING AMENDMENT -- WORKER NOTICE (Kallan Jordan); PENDING AMENDMENT -- WORKER NOTICE (Kallan Jordan)",
-    "open_issues": []
+    "last_issue_date": "25 Jun 2026",
+    "last_issue_summary": "EARLY CLOCK-OUT (Kallan Jordan); AUTO CLOCK-OUT (Kallan Jordan); OVERBILLING RISK -- HOURS EXCEED ROSTER ((all clients))",
+    "open_issues": [
+      "EARLY CLOCK-OUT"
+    ]
   },
   "14468881": {
     "worker_name": "Ahmed Yehia",
