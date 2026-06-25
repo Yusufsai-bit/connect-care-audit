@@ -1506,41 +1506,72 @@ Rules:
             logger.warning(f"verify_worker_claims time-clock error: {e}")
 
     # ── Incident report check ────────────────────────────────────────────────
+    # Checks all incident-type forms, not just the generic one.
+    # Uses server-side userIds + submittingStartTimestamp filters so we never
+    # silently miss a submission due to the API's default limit=10.
+    _INCIDENT_FORMS = {
+        9786979: "Incident Report",
+        2825220: "Kallan Incident Report",
+        2825225: "Safety Hazard Report",
+    }
     if check_incident:
         try:
-            cutoff = datetime.datetime.now().timestamp() - 48 * 3600
-            data   = ct_get("/forms/v1/forms/9786979/form-submissions")
-            subs   = (data.get("data") or {}).get("formSubmissions") or []
-            recent = [
-                s for s in subs
-                if str(s.get("submittingUserId")) == str(user_id)
-                and s.get("submissionTimestamp", 0) > cutoff
-            ]
-            if recent:
-                entry = recent[-1].get("entryNum", "?")
-                results.append(f"incident report: VERIFIED ✓ (entry #{entry})")
+            cutoff    = int(datetime.datetime.now().timestamp() - 48 * 3600)
+            found_sub = None
+            found_form_name = None
+            for form_id, form_name in _INCIDENT_FORMS.items():
+                data = ct_get(
+                    f"/forms/v1/forms/{form_id}/form-submissions",
+                    {
+                        "userIds":                  [int(user_id)],
+                        "submittingStartTimestamp": cutoff,
+                        "limit":                    100,
+                    },
+                )
+                subs = (data.get("data") or {}).get("formSubmissions") or []
+                if subs:
+                    found_sub       = subs[-1]
+                    found_form_name = form_name
+                    break
+            if found_sub:
+                entry = found_sub.get("entryNum", "?")
+                results.append(f"incident report: VERIFIED ✓ ({found_form_name} entry #{entry})")
             else:
-                results.append("incident report: NOT FOUND — no submission from you in the last 48h")
+                results.append("incident report: NOT FOUND — no submission from you in the last 48h on any incident form")
                 all_verified = False
         except Exception as e:
             logger.warning(f"verify_worker_claims incident-report error: {e}")
 
     # ── MAR / medication form check ──────────────────────────────────────────
+    _MEDICATION_FORMS = {
+        7294261: "Medication Incident Form",
+        3012456: "Kallan Medication Form",
+        4865646: "Michael Medications Plan",
+    }
     if check_mar:
         try:
-            cutoff = datetime.datetime.now().timestamp() - 48 * 3600
-            data   = ct_get("/forms/v1/forms/7294261/form-submissions")
-            subs   = (data.get("data") or {}).get("formSubmissions") or []
-            recent = [
-                s for s in subs
-                if str(s.get("submittingUserId")) == str(user_id)
-                and s.get("submissionTimestamp", 0) > cutoff
-            ]
-            if recent:
-                entry = recent[-1].get("entryNum", "?")
-                results.append(f"medication form: VERIFIED ✓ (entry #{entry})")
+            cutoff    = int(datetime.datetime.now().timestamp() - 48 * 3600)
+            found_sub = None
+            found_form_name = None
+            for form_id, form_name in _MEDICATION_FORMS.items():
+                data = ct_get(
+                    f"/forms/v1/forms/{form_id}/form-submissions",
+                    {
+                        "userIds":                  [int(user_id)],
+                        "submittingStartTimestamp": cutoff,
+                        "limit":                    100,
+                    },
+                )
+                subs = (data.get("data") or {}).get("formSubmissions") or []
+                if subs:
+                    found_sub       = subs[-1]
+                    found_form_name = form_name
+                    break
+            if found_sub:
+                entry = found_sub.get("entryNum", "?")
+                results.append(f"medication form: VERIFIED ✓ ({found_form_name} entry #{entry})")
             else:
-                results.append("medication form: NOT FOUND — no submission from you in the last 48h")
+                results.append("medication form: NOT FOUND — no submission from you in the last 48h on any medication form")
                 all_verified = False
         except Exception as e:
             logger.warning(f"verify_worker_claims MAR error: {e}")
