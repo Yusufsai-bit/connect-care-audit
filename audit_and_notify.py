@@ -183,13 +183,35 @@ def _get_strike_count(worker_name: str, category: str, _notified_unused: dict = 
     )
 
 
+_BANNED_PHRASES = {
+    "going forward":               "from now on",
+    "please be advised":           "",
+    "please note that":            "",
+    "it has come to my attention": "I've noticed",
+    "I am writing to":             "",
+    "as per our conversation":     "",
+    "at this point in time":       "now",
+    "in regards to":               "about",
+    "with regards to":             "about",
+}
+
+
+def _strip_banned_phrases(text: str) -> str:
+    import re
+    for phrase, replacement in _BANNED_PHRASES.items():
+        text = re.sub(re.escape(phrase), replacement, text, flags=re.IGNORECASE)
+    text = re.sub(r"  +", " ", text).strip()
+    return text
+
+
 def _format_history(history: list, first: str) -> str:
     """Format conversation turns as a readable block for Claude prompts."""
     if not history:
         return ""
     lines = []
     for turn in history[-6:]:
-        label = "Amy" if turn.get("role") == "amy" else first
+        is_amy = turn.get("role") == "amy" or turn.get("sender") == "amy"
+        label  = "Amy" if is_amy else first
         lines.append(f"{label}: {turn.get('text', '')}")
     return "\n".join(lines)
 
@@ -218,17 +240,19 @@ def build_worker_message(worker_name: str, issues: list, strike_counts: dict = N
     has_critical  = any(i.severity == "CRITICAL" for i in top_issues)
     max_strikes   = max((strike_counts.get(i.category, 0) for i in top_issues), default=0)
 
+    nth = max_strikes + 1
     if max_strikes >= 2:
         tone_instruction = (
-            "This worker has been flagged for the same issue 3 or more times. "
-            "Be direct and clear that this pattern needs to stop — name the fact that it's happened again. "
-            "No corporate language, but drop the softness. No threats, just firmness. "
-            "Example: 'Abdi, this is the third time now I've had to flag a late incident report. That's not okay — these need to go in within 30 minutes of the shift ending, every time.'"
+            f"This worker has been flagged for the same issue {nth} times in the last 30 days. "
+            f"State the exact count — don't say 'this has come up before', say 'this is the {nth}th time I've had to flag this'. "
+            "Be direct and clear that the pattern needs to stop. No corporate language, but drop the softness. No threats, just firmness. "
+            f"Example: '{first}, this is the {nth}th time I've had to flag this — that's not okay, it needs to be sorted every time.'"
         )
     elif max_strikes == 1:
         tone_instruction = (
-            "This worker has been flagged for this before. Acknowledge it's a repeat — briefly, not harshly. "
-            "Example: 'Hey, this one's come up before — just want to make sure we get it sorted this time.'"
+            "This worker has been flagged for this before — this is the 2nd time. "
+            "State that explicitly: say 'this is the second time I've had to flag this' — not 'this has come up before'. "
+            "Keep it brief and matter-of-fact, not harsh."
         )
     else:
         tone_instruction = "Casual and curious — first time flagging these issues. Lead with a question where the cause is unclear (GPS, late clock-in, short shift). Be direct where the cause is obvious (no clock-in at all, no notes at all)."
@@ -239,11 +263,12 @@ def build_worker_message(worker_name: str, issues: list, strike_counts: dict = N
         f"- Do NOT open with 'Hi {first},' — there's an ongoing conversation above, pick up the thread naturally."
         if history_block else f"- Start with 'Hey {first},' (casual, not 'Hi')"
     )
-    deadline_rule = (
-        "- This is urgent — ask them to reply today."
+    urgency_rule = (
+        "- This is urgent — make it clear this needs sorting today."
         if has_critical else
-        "- No hard deadline — just ask them to get back to you when they can today. Do NOT say '5 PM'."
+        "- Tone is firm but not panic — they should get on it, but no artificial deadline pressure."
     )
+    cta_rule = "- End every message with this exact line: 'Reply here when you've sorted it.' No other closing variation."
 
     if ANTHROPIC_API_KEY:
         try:
@@ -263,11 +288,13 @@ Rules:
 - For clear-cut issues (no clock-in at all, no notes submitted): be direct — "did you work that shift?" or "I've got no notes from that shift"
 - Use the client's name naturally ("at Kallan's", "at Joshua's place") and the actual day ("on Tuesday", "yesterday")
 - Raise at most 2–3 things — if there are more, focus on the most serious and say you'll follow up on the rest
-- Zero corporate language — no "identified", "compliance", "noted", "I am writing", "please be advised", "regarding"
-- No sign-off, no closing line
-- If the issue is missing notes or forms: remind them it needs to be done within 30 mins of the shift ending — casual, not a lecture
+- Zero corporate language — no "identified", "compliance", "noted", "I am writing", "please be advised", "regarding", "going forward"
+- When describing the worker's own actions (clocking in, clocking out, arriving, leaving) — always use "you" and "your", never "he", "she", or "they". Reserve client names for references to the client specifically.
+- If the issue involves missing notes, an incident report, or a form: tell them exactly where to go — "open the shift in Connecteam and add your notes there" or "go to the incident report for that shift and fill it in". Give one concrete action, not just "can you sort that".
+- If the issue is missing notes or forms: also remind them it needs to be done within 30 mins of the shift ending — casual, not a lecture
 - ONLY reference issues explicitly listed above — do not add, infer, or mention anything not in the list
-{deadline_rule}
+{urgency_rule}
+{cta_rule}
 - Output just the message text, nothing else"""
 
             resp = client.messages.create(
@@ -275,7 +302,7 @@ Rules:
                 max_tokens=400,
                 messages=[{"role": "user", "content": prompt}],
             )
-            return resp.content[0].text.strip()
+            return _strip_banned_phrases(resp.content[0].text.strip())
         except Exception as e:
             print(f"  [WARNING] Claude message generation failed: {e}")
 
@@ -1118,11 +1145,13 @@ def main():
                         f"Once they reply, approve or reject the hours."
                     )
 
-                # Save to conversation log so smart reply has context
+                # Save to conversation log so smart reply has context (append, don't overwrite)
+                existing_log  = convo_log.get(str(uid), {})
+                existing_msgs = existing_log.get("messages", []) if isinstance(existing_log, dict) else []
                 convo_log[str(uid)] = {
                     "worker_name":     worker_name,
                     "conversation_id": conv_map.get(str(uid), ""),
-                    "messages": [{"sender": "amy", "text": message, "ts": int(now.timestamp())}],
+                    "messages": existing_msgs + [{"role": "amy", "text": message, "ts": int(now.timestamp())}],
                 }
                 # Update persistent worker profile so Amy remembers this issue
                 _update_worker_profile_gh(str(uid), {
