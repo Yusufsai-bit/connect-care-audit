@@ -28,6 +28,11 @@
         "role": "amy",
         "text": "Hey \u2014 quick one on Tuesday at Kallan's. The system force-closed your shift at 15:10, but it looks like you didn't clock out manually before that happened. Do you remember what time you actually left? Just need to get that sorted so the hours line up.\n\nAlso, I've got your shift amendment from Wednesday \u2014 notes have come through and I'm reviewing it now, so no action needed from you there.\n\nReply here when you've sorted it.",
         "ts": 1782363865
+      },
+      {
+        "role": "amy",
+        "text": "Hey \u2014 just caught something on your shift at Kallan's yesterday. The system force-closed at 15:10 but you didn't clock out manually before that happened \u2014 this is the second time I've had to flag this. Do you remember what time you actually left? Need to get that sorted so the hours line up properly.\n\nAlso got your shift amendment notes through \u2014 I'm reviewing them now so no action needed from you there.\n\nReply here when you've sorted it.",
+        "ts": 1782450282
       }
     ]
   },
@@ -50,6 +55,11 @@
         "sender": "amy",
         "text": "Quick question on the shift at Nada Haliem's on Monday the 22nd \u2014 you clocked out at 13:10 but were scheduled until 4? What happened there? Need to get that sorted today if you can",
         "ts": 1782276774
+      },
+      {
+        "role": "amy",
+        "text": "Got another issue at Nada Haliem's \u2014 this is the second time I've had to flag this with you. You clocked out at 11:57 on Friday the 26th but were scheduled until 4, so you left 4 hours early. This needs sorting today.\n\nAlso just so you know, we got your shift amendment request for that day and it's pending review \u2014 your notes are in, no action needed from you there.\n\nReply here when you've sorted it.",
+        "ts": 1782450282
       }
     ]
   },
@@ -66,6 +76,11 @@
         "role": "amy",
         "text": "Hey, still waiting on that answer about Saturday at Kallan's \u2014 did you work that 15:00 shift or not?\n\nAlso need to flag something more urgent: on Tuesday you left Kallan's at 21:58 when you were scheduled until 09:00 \u2014 that's 662 minutes early. And this is the 3rd time I've had to flag you not clocking out manually. That's not okay, it needs to be sorted every single time.\n\nOn top of that, you've clocked 29 hours this period but you're only rostered for 24. I need you to confirm which of those extra hours were approved before we can bill them.\n\nThese need sorting today \u2014 can you get back to me on all three?\n\nReply here when you've sorted it.",
         "ts": 1782363865
+      },
+      {
+        "role": "amy",
+        "text": "Mohamed, still need that answer on Saturday at Kallan's \u2014 did you work that 15:00 shift or not?\n\nAlso, this is the 4th time I've had to flag you not clocking out manually. On Tuesday you left at 21:58 when you were meant to be there until 09:00, and the system had to force-close your shift. That's not okay \u2014 it needs to be sorted every single time. Clock out properly before you leave, yeah?\n\nOne more thing \u2014 you've clocked 29 hours this period but you're only rostered for 24. Which of those extra hours were approved? I need to know before we can bill them.\n\nReply here when you've sorted it.",
+        "ts": 1782450282
       }
     ]
   },
@@ -82,6 +97,11 @@
         "role": "amy",
         "text": "So just checking in on a couple things from your recent shifts at Joshua's \u2014 on Monday the 22nd you clocked out at 11:49 when you were meant to be there til 2, and then Tuesday the 23rd you clocked in late at 11:05 and left again at 12:22. This one's come up before so I want to make sure we get it sorted. What was going on with those two shifts?\n\nReply here when you've sorted it.",
         "ts": 1782363865
+      },
+      {
+        "role": "amy",
+        "text": "Hey Peter \u2014 just flagged a couple things on your recent shifts at Joshua's. Monday the 22nd you clocked out at 11:49 when you were meant to be there til 2, and then Tuesday the 23rd you were over 2 hours late clocking in at 11:05 and left again at 12:22. This one's come up before so want to make sure we get it sorted. What was going on with those two shifts?\n\nAlso just a heads up \u2014 your shift amendment for Friday the 26th came through and we've got your notes. That's all pending review on our end, nothing you need to do there.\n\nReply here when you've sorted it.",
+        "ts": 1782450282
       }
     ]
   },
@@ -98,6 +118,11 @@
         "role": "amy",
         "text": "Roja, this is the 4th time I've had to flag this \u2014 that's not okay. You didn't clock in for your shifts at Kallan's on Tuesday (23rd) and Wednesday (24th), both 15:00\u201321:00. Did you work those shifts? You need to clock in every single time \u2014 no exceptions.\n\nAlso need you to open the incident report from Wednesday at Kallan's and fill in the actual details about what happened with the training. Just saying \"Training cancelled\" isn't enough for NDIS \u2014 they need to know what went down and who you notified. Do that today when you get a chance.\n\nReply here when you've sorted it.",
         "ts": 1782363865
+      },
+      {
+        "role": "amy",
+        "text": "Roja, this is the 6th time I've had to flag this \u2014 that's not okay. You didn't clock in for your shift at Joshua's on Thursday (25th), 09:00\u201314:00. Did you work that shift?\n\nYou need to clock in every single time, no exceptions. This pattern needs to stop.\n\nGet back to me today.\n\nReply here when you've sorted it.",
+        "ts": 1782450282
       }
     ]
   },
@@ -114,6 +139,11 @@
         "role": "amy",
         "text": "Hey \u2014 just need to touch base on a couple of things from Evan's.\n\nThose incident reports from Thursday and Friday still need proper notes in them \u2014 NDIS needs the details about what happened, who was involved, all that. Can you open those shifts in Connecteam and fill them in? They need to go in within 30 mins of the shift ending so we can process them properly.\n\nAlso, you clocked in at 10:18 on Sunday when you were scheduled for 9am \u2014 what happened there? Just want to understand what went on.\n\nQuick heads up too \u2014 your amendment request from the 23rd came through and your notes are pending review now, so no action needed from you on that one \ud83d\udc4d\n\nReply here when you've sorted it.",
         "ts": 1782363865
+      },
+      {
+        "role": "amy",
+        "text": "Just following up on a couple things from Evan's \u2014 those incident reports from Thursday and Friday still need notes in them. Can you open those shifts in Connecteam and fill in what happened and who was involved? They need to go in within 30 mins of the shift ending so we can get them processed.\n\nAlso, what happened on Sunday? You clocked in at 10:18 when you were scheduled for 9am \u2014 where were you when you clocked in?\n\nQuick heads up too \u2014 your amendment request from the 23rd came through and your notes are pending review now, so no action needed from you on that one \ud83d\udc4d\n\nReply here when you've sorted it.",
+        "ts": 1782450282
       }
     ]
   },
@@ -141,6 +171,11 @@
         "sender": "amy",
         "text": "Hi Ikram,\n\nJust flagging something from your roster \u2014 Xavier Putchakayla on Thursday 18th June (17:00\u201321:00 shift) never clocked in. Can you let me know what happened there?",
         "ts": 1781847665
+      },
+      {
+        "role": "amy",
+        "text": "Hey, just following up on Xavier's shift on Thursday 25th June (17:00\u201321:00) \u2014 you never clocked in. Did you end up working that one, or what happened?\n\nNeed to get this sorted today.\n\nReply here when you've sorted it.",
+        "ts": 1782450282
       }
     ]
   },
