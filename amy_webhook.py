@@ -561,12 +561,12 @@ def _find_worker_id_by_name(name):
     for user in users:
         full = _display(user)
         if name_lower == full or full.startswith(name_lower):
-            return user.get("id")
+            return user.get("userId") or user.get("id")
     # Substring match
     for user in users:
         full = _display(user)
         if name_lower in full:
-            return user.get("id")
+            return user.get("userId") or user.get("id")
     return None
 
 
