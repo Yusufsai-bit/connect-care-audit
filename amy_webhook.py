@@ -207,10 +207,18 @@ def load_from_github() -> dict:
     """Load conversation log from GitHub, pruning entries older than CONVO_EXPIRY_DAYS."""
     data = _gh_load(CONVO_LOG_FILE, {})
     cutoff = time.time() - CONVO_EXPIRY_DAYS * 86400
-    return {
-        uid: v for uid, v in data.items()
-        if v.get("messages") and v["messages"][-1].get("ts", 0) >= cutoff
-    }
+    result = {}
+    for uid, v in data.items():
+        # New list format: [{role, text, ts, ts_unix}, ...]
+        if isinstance(v, list) and v:
+            last_ts = v[-1].get("ts_unix", cutoff)
+            if isinstance(last_ts, (int, float)) and last_ts >= cutoff:
+                result[uid] = v
+        # Old dict format: {worker_name, conversation_id, messages: [{sender, text}]}
+        # Keep it — append_to_conversation will migrate on next write
+        elif isinstance(v, dict) and v.get("messages"):
+            result[uid] = v
+    return result
 
 
 def save_to_github(data: dict):
@@ -317,7 +325,11 @@ def get_conversation_history(user_id, n=8):
     """Return last n turns as list of {role, text, ts} dicts."""
     memory = _gh_load("amy_conversation_log.json", {})
     hist = memory.get(str(user_id), [])
-    if isinstance(hist, str):
+    if isinstance(hist, dict):
+        old_msgs = hist.get("messages", [])
+        hist = [{"role": m.get("sender", "unknown"), "text": m.get("text", ""), "ts": ""}
+                for m in old_msgs if isinstance(m, dict)]
+    elif isinstance(hist, str):
         hist = [{"role": "amy", "text": hist, "ts": ""}] if hist else []
     return hist[-n:]
 
@@ -328,11 +340,19 @@ def append_to_conversation(user_id, role, text):
     """
     memory = _gh_load("amy_conversation_log.json", {})
     hist = memory.get(str(user_id), [])
-    if isinstance(hist, str):
-        hist = [{"role": "amy", "text": hist, "ts": ""}] if hist else []
     now_ts = int(time.time())
     cutoff = now_ts - CONVO_EXPIRY_DAYS * 86400
-    hist = [h for h in hist if h.get("ts_unix", now_ts) >= cutoff]
+    # Handle old dict format: {worker_name, conversation_id, messages: [{sender, text}]}
+    if isinstance(hist, dict):
+        old_msgs = hist.get("messages", [])
+        hist = [
+            {"role": m.get("sender", "unknown"), "text": m.get("text", "")[:800],
+             "ts": "", "ts_unix": cutoff}
+            for m in old_msgs if isinstance(m, dict)
+        ]
+    elif isinstance(hist, str):
+        hist = [{"role": "amy", "text": hist, "ts": "", "ts_unix": cutoff}] if hist else []
+    hist = [h for h in hist if isinstance(h, dict) and h.get("ts_unix", now_ts) >= cutoff]
     hist.append({
         "role":    role,
         "text":    text[:800],
