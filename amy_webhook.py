@@ -550,12 +550,21 @@ def _find_worker_id_by_name(name):
     name_lower = name.lower().strip()
     data = ct_get("/users/v1/users", {"limit": 100})
     users = (data.get("data") or {}).get("users") or []
+
+    def _display(u):
+        return (
+            u.get("displayName")
+            or f"{u.get('firstName', '')} {u.get('lastName', '')}".strip()
+        ).lower()
+
+    # Exact / prefix match first
     for user in users:
-        full = (user.get("displayName") or "").lower()
+        full = _display(user)
         if name_lower == full or full.startswith(name_lower):
             return user.get("id")
+    # Substring match
     for user in users:
-        full = (user.get("displayName") or "").lower()
+        full = _display(user)
         if name_lower in full:
             return user.get("id")
     return None
