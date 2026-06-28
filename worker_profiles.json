@@ -25,9 +25,12 @@
   },
   "2200746": {
     "worker_name": "Peter Eronmwon",
-    "last_issue_date": "27 Jun 2026",
-    "last_issue_summary": "MISSING FORM -- MICHAEL (Michael Lawrie); MISSING FORM -- MICHAEL (Michael Lawrie); PENDING AMENDMENT -- WORKER NOTICE (Michael Lawrie)",
-    "open_issues": []
+    "last_issue_date": "28 Jun 2026",
+    "last_issue_summary": "EARLY CLOCK-OUT (Michael Lawrie); NO CLOCK-IN (Michael Lawrie); MISSING FORM -- MICHAEL (Michael Lawrie)",
+    "open_issues": [
+      "EARLY CLOCK-OUT",
+      "NO CLOCK-IN"
+    ]
   },
   "2467746": {
     "worker_name": "Roja Mehmood",
