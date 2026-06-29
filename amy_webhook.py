@@ -1305,8 +1305,11 @@ Write Amy's reply. Non-negotiable rules:
 - 2-3 sentences max. Get to the point — don't pad.
 - If notes verified present: "yeah can see them now, all good" style
 - If notes not found yet: "can't see them yet — did they save properly?" style
+- If clock-in verified: acknowledge it naturally — "yeah got you clocked in at [time]" style
+- If clock-in NOT FOUND but worker claims they worked: do NOT make up an excuse like "the system's not showing it yet". Say "can't see the clock-in from my end — can you put in a time correction on Connecteam and I'll get it sorted?" and classify COMPLEX
 - If PENDING ADMIN APPROVAL in verification: acknowledge they submitted it and say it just needs approval from the admin side — classify COMPLEX so the manager can approve. Say something like "got it, just needs sign-off from our end — I'll get it sorted"
 - If COMPLEX: "leave it with me, I'll sort it out" NOT "I will escalate this to management"
+- NEVER say "Reply here when you've sorted it" or similar — never end with a call-to-action prompt
 - If worker is asking something unrelated to compliance (shift swaps, leave etc): classify COMPLEX
 
 JSON only — no other text:
@@ -1464,7 +1467,7 @@ def verify_worker_claims(user_id, text, history=None):
     thread = "\n".join(thread_lines)
 
     # Use Claude to classify what needs to be checked, falling back to keywords
-    check_notes = check_clockout = check_incident = check_mar = False
+    check_notes = check_clockout = check_clockin = check_incident = check_mar = False
     if ANTHROPIC_API_KEY:
         try:
             classify_prompt = f"""You are reading a compliance conversation between Amy (coordinator) and a worker at an NDIS disability support organisation.
@@ -1473,10 +1476,11 @@ Conversation (last 5 messages):
 {thread}
 
 The worker's latest message claims they have completed or fixed something. Based on the full conversation thread, identify what needs to be verified in Connecteam. Reply with JSON only — no other text:
-{{"check_notes": true/false, "check_clockout": true/false, "check_incident_report": true/false, "check_mar_form": true/false}}
+{{"check_notes": true/false, "check_clockin": true/false, "check_clockout": true/false, "check_incident_report": true/false, "check_mar_form": true/false}}
 
 Rules:
 - check_notes: true if shift notes / progress notes were discussed
+- check_clockin: true if the worker claims they clocked IN (possibly late), or that they were present/worked a shift that shows no clock-in
 - check_clockout: true if missing clock-out, auto clock-out, or clocking out was discussed
 - check_incident_report: true if an incident report form was discussed
 - check_mar_form: true if a medication administration record or medication form was discussed
@@ -1488,6 +1492,7 @@ Rules:
                     clean = re.sub(r"```(?:json)?", "", clean).strip()
                 flags = json.loads(clean)
                 check_notes     = bool(flags.get("check_notes"))
+                check_clockin   = bool(flags.get("check_clockin"))
                 check_clockout  = bool(flags.get("check_clockout"))
                 check_incident  = bool(flags.get("check_incident_report"))
                 check_mar       = bool(flags.get("check_mar_form"))
@@ -1495,9 +1500,10 @@ Rules:
             logger.warning(f"verify classification Claude call failed: {e} — falling back to keywords")
 
     # Keyword fallback if Claude unavailable or failed
-    if not any([check_notes, check_clockout, check_incident, check_mar]):
+    if not any([check_notes, check_clockin, check_clockout, check_incident, check_mar]):
         combined       = thread.lower()
         check_notes    = any(w in combined for w in ["note", "notes", "shift note", "progress note", "no shift notes"])
+        check_clockin  = any(w in combined for w in ["clocked in", "clock in", "i worked", "i was there", "i did the shift", "clocked in late", "bit late"])
         check_clockout = any(w in combined for w in ["clock out", "clocked out", "auto-closed", "auto closed", "clock-out"])
         check_incident = any(w in combined for w in ["incident report", "report filed"])
         check_mar      = any(w in combined for w in ["medication", "mar form", "mar", "medication form"])
@@ -1507,8 +1513,8 @@ Rules:
     today        = datetime.date.today().isoformat()
     yesterday    = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
 
-    # ── Time-clock checks (notes + clock-out) ────────────────────────────────
-    if check_notes or check_clockout:
+    # ── Time-clock checks (notes + clock-in + clock-out) ─────────────────────
+    if check_notes or check_clockin or check_clockout:
         try:
             data     = ct_get(
                 f"/time-clock/v1/time-clocks/{TIME_CLOCK_ID}/time-activities",
@@ -1525,6 +1531,18 @@ Rules:
                 )
                 results.append("shift notes: VERIFIED ✓" if found_note else "shift notes: NOT FOUND — can't see them yet")
                 if not found_note:
+                    all_verified = False
+
+            if check_clockin:
+                clocked_in = any((s.get("start") or {}).get("timestamp") for s in shifts)
+                if clocked_in:
+                    start_ts = next(
+                        ((s.get("start") or {}).get("timestamp") for s in shifts
+                         if (s.get("start") or {}).get("timestamp")), None
+                    )
+                    results.append(f"clock-in: VERIFIED ✓ (start timestamp found: {start_ts})")
+                else:
+                    results.append("clock-in: NOT FOUND — no clock-in record in the last 2 days")
                     all_verified = False
 
             if check_clockout:
@@ -1811,6 +1829,7 @@ def _post_to_cc_mgmt(relay):
 def _compose_invoice_worker_draft(
     worker_name: str, period: str, issues_summary: str,
     notes_clean: bool = False, ir_clean: bool = False,
+    history: list = None,
 ) -> str:
     """Compose a worker-facing invoice audit message structured into two sections."""
     first = worker_name.split()[0]
@@ -1828,12 +1847,20 @@ def _compose_invoice_worker_draft(
         "\nWhat was assessed and looks good (mention positively, naturally):\n" + "\n".join(praise_lines)
         if praise_lines else "\nNothing assessed as clean — omit any praise section."
     )
+    history_section = ""
+    if history:
+        lines = []
+        for turn in history[-6:]:
+            label = "Amy" if turn.get("role") == "amy" else first
+            lines.append(f"{label}: {turn.get('text', '')[:200]}")
+        if lines:
+            history_section = "\nRecent conversation with this worker (so you don't repeat questions already answered):\n" + "\n".join(lines) + "\n"
     prompt = f"""You are Amy, a coordinator at Connect Care. Write a message to {first} about their invoice for {period}.
 
 Issues found (format: [SEVERITY] CATEGORY | Client | Date: Detail):
 {issues_summary}
 {praise_block}
-
+{history_section}
 Structure the message (plain text, no markdown, no bold, no special characters):
 
 Section 1 header: "To complete before invoice is processed:"
@@ -1847,6 +1874,8 @@ If there are no quality issues, omit Section 2 entirely.
 
 If anything was assessed as clean (see above), add a short line acknowledging it naturally after the issues — e.g. "Shift notes look great this period." or "Incident reports are all good." Keep it brief and genuine, not over the top.
 
+If a question in the issues list was already asked in the recent conversation above and the worker answered it, reference their answer instead of re-asking the same question.
+
 Rules:
 - Open with: Hey {first}, been through your invoice for {period} —
 - Be specific: name the client, the form, the date
@@ -1857,6 +1886,7 @@ Rules:
 - No bullet symbols, no numbered lists
 - End with: "Get the outstanding submissions in and I'll let you know once we're cleared to process."
 - Blank line between sections
+- NEVER end with "Reply here when you've sorted it" or any variation
 - Output just the message, nothing else"""
     result = _call_claude(prompt, max_tokens=700, model="claude-sonnet-4-6")
     return result or (
@@ -2023,10 +2053,12 @@ JSON only."""
             alert_cc_management("No invoice audit in context — run the audit first.")
             return
         alert_cc_management(f"Drafting message for {worker_name}...")
+        worker_history = get_conversation_history(str(worker_id)) if worker_id else None
         draft = _compose_invoice_worker_draft(
             worker_name, period, issues_summary,
             notes_clean=_LAST_INVOICE_CONTEXT.get("notes_clean", False),
             ir_clean=_LAST_INVOICE_CONTEXT.get("ir_clean", False),
+            history=worker_history,
         )
         _LAST_INVOICE_CONTEXT["pending_draft"] = draft
         _LAST_INVOICE_CONTEXT["pending_draft_worker_id"] = str(worker_id)
