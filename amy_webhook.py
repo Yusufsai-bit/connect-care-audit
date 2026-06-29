@@ -2392,10 +2392,24 @@ def handle_chat_reply(data):
         "approved a form submission",
         "rejected a form submission",
         "completed a form",
+        "shift sent",
+        "sent for approval",
+        "shift approved",
+        "shift rejected",
+        "shift published",
+        "shift deleted",
+        "shift updated",
     )
     if any(p in text.lower() for p in _SYSTEM_TEXT_PATTERNS):
         logger.info(f"[chat] skipped system notification (content pattern) from userId={user_id!r}: {text[:60]!r}")
         return
+
+    # Conversation allowlist — only process messages from CC Management or known worker convs
+    if conv_id and conv_id != CC_MGMT_CONV_ID:
+        _known_convs = set(load_worker_conversations().values())
+        if conv_id not in _known_convs:
+            logger.info(f"[chat] skipped — conv {conv_id!r} is not CC Management or a known worker conversation")
+            return
 
     try:
         uid = int(user_id)
