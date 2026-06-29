@@ -1234,15 +1234,15 @@ def send_msg_sms(phone, text) -> bool:
 
 # ── Claude helpers ─────────────────────────────────────────────────────────────
 
-def _call_claude(prompt, max_tokens=300):
-    """Call Claude Haiku and return the text response. Returns None on failure."""
+def _call_claude(prompt, max_tokens=300, model="claude-haiku-4-5"):
+    """Call Claude and return the text response. Returns None on failure."""
     if not ANTHROPIC_API_KEY:
         return None
     try:
         import anthropic
         client   = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
         response = client.messages.create(
-            model="claude-haiku-4-5",
+            model=model,
             max_tokens=max_tokens,
             messages=[{"role": "user", "content": prompt}],
         )
@@ -1302,7 +1302,7 @@ Write Amy's reply. Non-negotiable rules:
 - NEVER use these words/phrases: noted, acknowledged, please note, please be advised, I need you to, ensure that, outstanding issues, at your earliest convenience, flagged, I have logged, this matter, please ensure, going forward, action this, your attention, I will escalate
 - NO bullet points, NO numbered lists
 - If this isn't the first message (check history), don't open with "Hi {first}" — vary your opener
-- Max 2 sentences. Get to the point.
+- 2-3 sentences max. Get to the point — don't pad.
 - If notes verified present: "yeah can see them now, all good" style
 - If notes not found yet: "can't see them yet — did they save properly?" style
 - If PENDING ADMIN APPROVAL in verification: acknowledge they submitted it and say it just needs approval from the admin side — classify COMPLEX so the manager can approve. Say something like "got it, just needs sign-off from our end — I'll get it sorted"
@@ -1312,7 +1312,7 @@ Write Amy's reply. Non-negotiable rules:
 JSON only — no other text:
 {{"is_complex": true/false, "reply": "..."}}"""
 
-    raw = _call_claude(prompt, max_tokens=500)
+    raw = _call_claude(prompt, max_tokens=500, model="claude-sonnet-4-6")
     if not raw:
         return False, f"Hey {first}, got it — I'll be in touch."
     try:
@@ -1383,7 +1383,7 @@ Issues: {issues_summary}
 Manager's guidance: "{manager_guidance}"
 
 Write Amy's reply to {first} based on what the manager said. Sound like a real person texting — casual, warm, direct. Use their first name. Don't mention the manager or that you were told what to say. 2-3 sentences max. Just the message, no extra text."""
-    result = _call_claude(prompt)
+    result = _call_claude(prompt, model="claude-sonnet-4-6")
     return result if result else manager_guidance
 
 
@@ -1409,12 +1409,12 @@ def _generate_shift_end_msg(first_name, client_name, flags, history=None) -> str
 {history_section}
 Issue(s): {issues_desc}
 
-Write a casual, natural follow-up — like a real person texting a colleague. 2 sentences max.
+Write a casual, natural follow-up — like a real person texting a colleague. 3 sentences max.
 Rules: no bullet points, no "please note", no "outstanding", no "ensure", no "I need you to".
 {opener_rule}
 Don't repeat anything already covered in the conversation above.
 Sound human. Just the message, nothing else."""
-    result = _call_claude(prompt)
+    result = _call_claude(prompt, model="claude-sonnet-4-6")
     return result or f"Hey {first_name}, just a quick one — {issues_desc} for {client_name}. Can you jump on that?"
 
 
@@ -1858,7 +1858,7 @@ Rules:
 - End with: "Get the outstanding submissions in and I'll let you know once we're cleared to process."
 - Blank line between sections
 - Output just the message, nothing else"""
-    result = _call_claude(prompt, max_tokens=700)
+    result = _call_claude(prompt, max_tokens=700, model="claude-sonnet-4-6")
     return result or (
         f"Hey {first}, been through your invoice for {period} — a few things need sorting "
         f"before we can process it. Check Connecteam for outstanding forms and get them in asap."
@@ -2780,8 +2780,13 @@ def _process_event(payload):
     event = payload.get("eventType", "")
     data  = payload.get("data", {})
 
-    # Dedup — Connecteam retries on timeout; don't process the same event twice
-    msg_id = str(data.get("messageId") or data.get("id") or "")
+    # Dedup — Connecteam retries on timeout; don't process the same event twice.
+    # Chat events nest their message ID inside data["message"], so check both levels.
+    _nested = data.get("message") or {}
+    msg_id = str(
+        data.get("messageId") or data.get("id") or
+        _nested.get("messageId") or _nested.get("id") or ""
+    )
     if msg_id:
         with _SEEN_LOCK:
             if msg_id in _SEEN_IDS:
