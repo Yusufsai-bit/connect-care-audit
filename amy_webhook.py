@@ -39,6 +39,7 @@ import random
 import base64
 import logging
 import re
+import signal
 import threading
 import datetime
 import requests
@@ -2819,6 +2820,37 @@ def _process_event(payload):
 
 # ── Startup ────────────────────────────────────────────────────────────────────
 
+def _graceful_shutdown(signum, frame):
+    """Save relay queue and pending draft to GitHub before Render kills the process."""
+    logger.info(f"[shutdown] Signal {signum} received — saving state before exit")
+    try:
+        save_pending_relay(PENDING_RELAY_QUEUE)
+        logger.info(f"[shutdown] Relay queue saved ({len(PENDING_RELAY_QUEUE)} items)")
+    except Exception as e:
+        logger.error(f"[shutdown] Failed to save relay queue: {e}")
+    raise SystemExit(0)
+
+signal.signal(signal.SIGTERM, _graceful_shutdown)
+
+
+def _resume_relay_queue():
+    """Re-post any relay items that survived a restart to CC Management."""
+    if not PENDING_RELAY_QUEUE:
+        return
+    logger.info(f"[startup] Resuming {len(PENDING_RELAY_QUEUE)} pending relay item(s) from previous run")
+    time.sleep(5)  # wait for server to be fully ready before posting
+    first = PENDING_RELAY_QUEUE[0]
+    worker = first.get("worker_name", "A worker")
+    first_name = worker.split()[0]
+    resume_msg = (
+        f"[Resumed after restart] {first_name} is still waiting for a response:\n\n"
+        f"\"{first['reply']}\"\n\n"
+        f"Reply with your guidance and Amy will send it."
+    )
+    post_to_conversation(CC_MGMT_CONV_ID, resume_msg)
+    logger.info(f"[startup] Re-alerted CC Management about pending relay for {worker}")
+
+
 @app.on_event("startup")
 async def startup():
     global conversation_log, PENDING_RELAY_QUEUE
@@ -2826,6 +2858,8 @@ async def startup():
     logger.info(f"Loaded {len(conversation_log)} worker conversation(s) from GitHub")
     PENDING_RELAY_QUEUE = load_pending_relay()
     logger.info(f"Loaded {len(PENDING_RELAY_QUEUE)} pending relay item(s)")
+    if PENDING_RELAY_QUEUE:
+        threading.Thread(target=_resume_relay_queue, daemon=True).start()
     _discover_resource_ids()
     _schedule_all_shifts()
     logger.info("Shift-end compliance scheduler started")
