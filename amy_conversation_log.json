@@ -43,6 +43,11 @@
         "role": "amy",
         "text": "Hey \u2014 still need you to sort a couple of things from the Kallan's shift on Friday.\n\nFirst: the incident report has no record of you notifying the family or guardian after it happened. That needs to happen within 30 mins of your shift ending \u2014 can you go back into the incident report and add who you called and when? Also need actual detail on what happened, not just \"Behaviour of Concern\".\n\nSecond: this is the second time I've had to flag this \u2014 you didn't clock out manually before the system closed at 15:10. Do you remember what time you actually left? Need that to get your hours sorted.\n\nReply here when you've sorted it.",
         "ts": 1782535326
+      },
+      {
+        "role": "amy",
+        "text": "Ali \u2014 need to flag a couple of things from the Kallan's shift on Friday, and this is the 3rd time I've had to bring these up, so they need to be sorted every time from now on.\n\nFirst: the incident report has no record of you notifying the family or guardian after it happened. That needs to happen within 30 mins of your shift ending. Go into the incident report in Connecteam and add who you called and when. Also need actual detail on what happened \u2014 not just \"Behaviour of Concern\".\n\nSecond: you didn't clock out manually before the system closed at 15:10. What time did you actually leave?\n\nReply here when you've sorted it.",
+        "ts": 1782709775
       }
     ]
   },
@@ -142,6 +147,11 @@
         "role": "amy",
         "text": "Peter, need to flag a couple of critical things from your Michael shifts that need sorting today.\n\nSaturday the 27th \u2014 I've got no clock-in recorded for your 4pm\u2013midnight shift. Did you work that one? Also you clocked out at midnight when you were scheduled til 10am \u2014 that's 599 minutes early. This is the 4th time I've had to flag early clock-outs in the last month, that's not okay and it needs to be sorted every time.\n\nSunday the 28th \u2014 I've got no Medications Plan forms submitted for Michael. Need you to open those shifts in Connecteam and add your notes in. Forms need to go in within 30 mins of the shift ending.\n\nReply here when you've sorted it.",
         "ts": 1782624072
+      },
+      {
+        "role": "amy",
+        "text": "Hey \u2014 just checking in on your shift amendment for Monday the 29th at John's. Your notes came through and we've got them \u2014 that's all pending review on our end so nothing you need to do there.\n\nReply here when you've sorted it.",
+        "ts": 1782709775
       }
     ]
   },
@@ -194,6 +204,11 @@
         "role": "amy",
         "text": "Hey \u2014 just need to sort a couple things from Evan's.\n\nThose incident reports from Thursday and Friday still need notes in them. Can you open those shifts in Connecteam and fill in what happened and who was involved? They need to go in within 30 mins of the shift ending so we can get them processed for NDIS.\n\nAlso, what happened on Sunday? You clocked in at 10:18 when you were scheduled for 9am \u2014 where were you when you clocked in?\n\nQuick heads up too \u2014 your amendment request from the 23rd came through and your notes are pending review now, so no action needed from you on that one \ud83d\udc4d\n\nReply here when you've sorted it.",
         "ts": 1782624072
+      },
+      {
+        "role": "amy",
+        "text": "Right \u2014 need to flag a couple of serious things from Evan's that need sorting today.\n\nOn Sunday you clocked in at 11:24 when you were scheduled for 9am \u2014 that's 145 mins late. This is the second time I've had to flag a late clock-in with you, so we need to talk through what's going on. Where were you when you clocked in?\n\nAlso, you didn't manually clock out on Saturday or Sunday \u2014 the system auto-closed both shifts at 14:10. This is the second time this has happened too. You need to make sure you're clocking out properly at the end of each shift, yeah?\n\nLet me know what happened and we can sort this.\n\nReply here when you've sorted it.",
+        "ts": 1782709775
       }
     ]
   },
@@ -241,6 +256,11 @@
         "role": "amy",
         "text": "Hey, just need to sort a few things from your shift on Saturday 27th June. You clocked in 82 mins late (scheduled 15:00, got there at 16:21) \u2014 what happened there? Also, the system force-closed your shift at 19:10 because you didn't clock out manually, so I've got no idea when you actually finished. Can you log back in and clock out properly?\n\nOne more thing \u2014 I can see you submitted a shift amendment for that day. Just letting you know we've got your notes and they're pending review, so no need to do anything else on that one.\n\nReply here when you've sorted it.",
         "ts": 1782624072
+      },
+      {
+        "role": "amy",
+        "text": "Hey Ikram, quick one \u2014 I'm seeing you clocked 21.9 hours this period but you were only rostered for 4 hours. That's a pretty big gap. Can you walk me through what shifts you actually worked? Need to make sure everything's legit before we bill anything.\n\nReply here when you've sorted it.",
+        "ts": 1782709775
       }
     ]
   },
@@ -257,6 +277,11 @@
         "role": "amy",
         "text": "Hey Ahmed \u2014 quick one about Saturday at Joshua's. You never clocked in for your 09:00 shift \u2014 did you end up working that day? Let me know what happened there so I can get it sorted.\n\nReply here when you've sorted it.",
         "ts": 1782535326
+      },
+      {
+        "role": "amy",
+        "text": "Just checking \u2014 did you actually work the 09:00 shift at Joshua's on Saturday? You never clocked in for it, so I need to know what happened there so I can get it sorted on my end.\n\nAlso got your shift amendment request and your notes are pending review with us \u2014 nothing more you need to do, we'll let you know once it's done.\n\nReply here when you've sorted it.",
+        "ts": 1782709775
       }
     ]
   }

@@ -533,5 +533,40 @@
     "worker": "Peter Eronmwon",
     "category": "UNSCHEDULED SHIFT",
     "date": "2026-06-28"
+  },
+  {
+    "worker": "Abdul Latif",
+    "category": "LATE CLOCK-IN",
+    "date": "2026-06-29"
+  },
+  {
+    "worker": "Abdul Latif",
+    "category": "AUTO CLOCK-OUT",
+    "date": "2026-06-29"
+  },
+  {
+    "worker": "Abdul Latif",
+    "category": "AUTO CLOCK-OUT",
+    "date": "2026-06-29"
+  },
+  {
+    "worker": "Abdul Latif",
+    "category": "LATE CLOCK-IN",
+    "date": "2026-06-29"
+  },
+  {
+    "worker": "Ali Saaram",
+    "category": "INCIDENT REPORT \u2014 MISSING WITNESS/NOTIFICATION",
+    "date": "2026-06-29"
+  },
+  {
+    "worker": "Ali Saaram",
+    "category": "TYPE 2 NOTIFIABLE INCIDENT \u2014 5-DAY NDIS COMMISSION REPORT REQUIRED",
+    "date": "2026-06-29"
+  },
+  {
+    "worker": "Ikram Mohammad",
+    "category": "OVERBILLING RISK -- HOURS EXCEED ROSTER",
+    "date": "2026-06-29"
   }
 ]
