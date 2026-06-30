@@ -69,9 +69,10 @@ NOTES_FIELD      = "65cbb88e-6c3a-41b1-8822-975caed50def"
 GPS_THRESHOLD_KM = 0.5    # allowed radius from client address
 SHORT_SHIFT_MIN  = 15     # shifts under this are suspicious
 
-CLIENT_GPS_OVERRIDES = {
-    "john": (-37.67282, 144.99437, 0.2),
-}
+try:
+    from connecteam_audit import CLIENT_GPS_OVERRIDES
+except ImportError:
+    CLIENT_GPS_OVERRIDES = {}
 
 QUIET_START = 19   # 7 PM AEST — no worker messages after this hour
 QUIET_END   = 6    # 6 AM AEST — no worker messages before this hour
@@ -102,7 +103,7 @@ GITHUB_REPO          = os.environ.get("GITHUB_REPO", "Yusufsai-bit/connect-care-
 WEBHOOK_SECRET       = os.environ.get("WEBHOOK_SECRET", "")
 if not WEBHOOK_SECRET:
     raise RuntimeError("WEBHOOK_SECRET environment variable is not set — cannot verify Connecteam webhook signatures")
-MANAGER_NUMBER       = os.environ.get("MANAGER_NUMBER", "+61431836771")
+MANAGER_NUMBER       = os.environ.get("MANAGER_NUMBER", "")
 NOTIFICATIONS_FILE   = os.environ.get("NOTIFICATIONS_FILE", "notifications_log.json")
 
 CC_MGMT_CONV_ID = os.environ.get("CC_MGMT_CONV_ID", "")
@@ -152,6 +153,20 @@ _EVENT_LOG_LOCK = threading.Lock()
 _LAST_INVOICE_CONTEXT: dict = {}   # {worker, period, issues_summary, raw_issues}
 
 app = FastAPI()
+
+
+@app.on_event("startup")
+async def _startup_checks():
+    """Warn at startup if worker_conversations.json is missing or empty."""
+    conv_map = load_worker_conversations()
+    if not conv_map:
+        logger.error("STARTUP: worker_conversations.json is empty or missing — worker replies will fail. Run detect_worker_conversations() to fix.")
+        threading.Thread(
+            target=alert_cc_management,
+            args=("⚠️ Amy started but worker_conversations.json is missing. Worker replies won't work until detect_worker_conversations() is run.",),
+            daemon=True,
+        ).start()
+
 
 # ── GitHub / disk persistence helpers ─────────────────────────────────────────
 
@@ -2465,7 +2480,13 @@ def handle_chat_reply(data):
         log_cc_mgmt("manager", text)
 
         # Invoice audit trigger — "[name] sent their invoice" etc.
-        if CONNECTEAM_API_KEY:
+        _INVOICE_KWS = {
+            "submitted their invoice", "sent their invoice",
+            "sent his invoice", "sent her invoice",
+            "submitted his invoice", "submitted her invoice",
+            "sent invoice", "submitted invoice",
+        }
+        if CONNECTEAM_API_KEY and any(kw in text_lower for kw in _INVOICE_KWS):
             try:
                 from connecteam_audit import fetch_all_users as _fetch_users
                 _users = _fetch_users()
@@ -2476,6 +2497,12 @@ def handle_chat_reply(data):
                         args=(inv_name, str(inv_id)),
                         daemon=True,
                     ).start()
+                    return
+                else:
+                    ct_post(
+                        f"/chat/v1/conversations/{CC_MGMT_CONV_ID}/message",
+                        {"senderId": SENDER_ID, "text": "Couldn't match a worker name in that message — try: \"[First Last] sent their invoice\""},
+                    )
                     return
             except Exception as e:
                 logger.warning(f"[invoice] trigger check failed: {e}")
