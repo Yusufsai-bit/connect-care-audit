@@ -302,7 +302,11 @@ Rules:
                 max_tokens=400,
                 messages=[{"role": "user", "content": prompt}],
             )
-            return _strip_banned_phrases(resp.content[0].text.strip())
+            msg = _strip_banned_phrases(resp.content[0].text.strip())
+            cta = "Reply here when you've sorted it."
+            if cta not in msg:
+                msg = msg.rstrip() + "\n\n" + cta
+            return msg
         except Exception as e:
             print(f"  [WARNING] Claude message generation failed: {e}")
 
