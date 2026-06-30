@@ -25,9 +25,11 @@
   },
   "2200746": {
     "worker_name": "Peter Eronmwon",
-    "last_issue_date": "29 Jun 2026",
-    "last_issue_summary": "PENDING AMENDMENT -- WORKER NOTICE (John Auzagelis)",
-    "open_issues": []
+    "last_issue_date": "30 Jun 2026",
+    "last_issue_summary": "NO CLOCK-IN (Michael Lawrie)",
+    "open_issues": [
+      "NO CLOCK-IN"
+    ]
   },
   "2467746": {
     "worker_name": "Roja Mehmood",
