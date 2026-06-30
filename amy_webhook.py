@@ -2438,7 +2438,10 @@ def handle_chat_reply(data):
         return
 
     # Conversation allowlist — only process messages from CC Management or known worker convs
-    if conv_id and conv_id != CC_MGMT_CONV_ID:
+    if not conv_id:
+        logger.info(f"[chat] skipped — missing conversationId from userId={user_id!r}")
+        return
+    if conv_id != CC_MGMT_CONV_ID:
         _known_convs = set(load_worker_conversations().values())
         if conv_id not in _known_convs:
             logger.info(f"[chat] skipped — conv {conv_id!r} is not CC Management or a known worker conversation")
@@ -2523,6 +2526,13 @@ def handle_chat_reply(data):
     # ── Worker message ────────────────────────────────────────────────────────
     worker = get_worker_name(user_id) if CONNECTEAM_API_KEY else str(user_id)
     logger.info(f"Message from {worker}: '{text[:80]}'")
+
+    # Pre-send check: don't call Claude if there's no conversation to reply to
+    _conv_map = load_worker_conversations()
+    if not _conv_map.get(str(uid)):
+        logger.error(f"[chat] no conversation mapped for {worker} (user {uid}) — run detect_worker_conversations() to fix")
+        alert_cc_management(f"Amy received a message from {worker} but has no Connecteam conversation mapped. Run detect_worker_conversations() to fix.")
+        return
 
     issues   = get_worker_issues(user_id)
     history  = get_conversation_history(user_id)
