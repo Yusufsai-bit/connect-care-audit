@@ -568,5 +568,40 @@
     "worker": "Ikram Mohammad",
     "category": "OVERBILLING RISK -- HOURS EXCEED ROSTER",
     "date": "2026-06-29"
+  },
+  {
+    "worker": "Abdul Latif",
+    "category": "OVERBILLING RISK -- HOURS EXCEED ROSTER",
+    "date": "2026-06-30"
+  },
+  {
+    "worker": "Mohamed Liban",
+    "category": "AUTO CLOCK-OUT",
+    "date": "2026-06-30"
+  },
+  {
+    "worker": "Mohamed Liban",
+    "category": "AUTO CLOCK-OUT",
+    "date": "2026-06-30"
+  },
+  {
+    "worker": "Peter Eronmwon",
+    "category": "NO CLOCK-IN",
+    "date": "2026-06-30"
+  },
+  {
+    "worker": "Roja Mehmood",
+    "category": "NO CLOCK-IN",
+    "date": "2026-06-30"
+  },
+  {
+    "worker": "Roja Mehmood",
+    "category": "NO CLOCK-IN",
+    "date": "2026-06-30"
+  },
+  {
+    "worker": "Roja Mehmood",
+    "category": "NO CLOCK-IN",
+    "date": "2026-06-30"
   }
 ]

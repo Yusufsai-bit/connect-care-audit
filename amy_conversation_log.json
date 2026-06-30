@@ -85,6 +85,11 @@
         "role": "amy",
         "text": "One more thing from Nada Haliem's \u2014 the system auto-closed your shift on Saturday the 27th at 16:10, so you didn't clock out manually. Can you sort that in Connecteam today?\n\nAlso just a heads up on your shift amendment request for that day \u2014 we've got your notes and it's pending review, no action needed from you there.\n\nReply here when you've sorted it.",
         "ts": 1782624072
+      },
+      {
+        "role": "amy",
+        "text": "Just a heads up \u2014 you've got a shift amendment pending for Monday the 29th at Nada Haliem's. Your notes are in and we're reviewing it, so nothing you need to do on your end. Just wanted to let you know it's in progress.\n\nReply here when you've sorted it.",
+        "ts": 1782794556
       }
     ]
   },
@@ -116,6 +121,11 @@
         "role": "amy",
         "text": "Mohamed, need to sort a few things from Saturday at Kallan's.\n\nFirst \u2014 you clocked in at 16:16 when you were scheduled for 15:00. That's 76 minutes late. Where were you when you clocked in?\n\nAlso, this is the 5th time I've had to flag you not clocking out manually. The system force-closed your shift at 15:10 and again at 21:10 because you didn't clock out properly. That's not okay \u2014 you need to clock out every single time before you leave, yeah?\n\nReply here when you've sorted it.",
         "ts": 1782624072
+      },
+      {
+        "role": "amy",
+        "text": "Mohamed, couple of things from Sunday at Kallan's. You didn't clock out manually \u2014 the system had to force-close your shift at both 15:10 and 21:10. This is the 7th time I've had to flag this in the last month, and that's not okay. You need to clock out every single time before you leave, yeah?\n\nAlso got your shift amendment notes through for Monday \u2014 they're pending review on our end, so nothing else needed from you on that one.\n\nReply here when you've sorted it.",
+        "ts": 1782794556
       }
     ]
   },
@@ -152,6 +162,11 @@
         "role": "amy",
         "text": "Hey \u2014 just checking in on your shift amendment for Monday the 29th at John's. Your notes came through and we've got them \u2014 that's all pending review on our end so nothing you need to do there.\n\nReply here when you've sorted it.",
         "ts": 1782709775
+      },
+      {
+        "role": "amy",
+        "text": "Peter \u2014 just need to flag something from your Michael shift on Sunday the 28th. You were rostered 12-10am but I've got no clock-in recorded for that shift. Did you work that one? This is the second time I've had to flag a missing clock-in with you, so need to get it sorted today.\n\nReply here when you've sorted it.",
+        "ts": 1782794556
       }
     ]
   },
@@ -173,6 +188,11 @@
         "role": "amy",
         "text": "Roja, this is the 6th time I've had to flag this \u2014 that's not okay. You didn't clock in for your shift at Joshua's on Thursday (25th), 09:00\u201314:00. Did you work that shift?\n\nYou need to clock in every single time, no exceptions. This pattern needs to stop.\n\nGet back to me today.\n\nReply here when you've sorted it.",
         "ts": 1782450282
+      },
+      {
+        "role": "amy",
+        "text": "Roja, this is the 7th time I've had to flag this \u2014 that's not okay, it needs to be sorted every time.\n\nYou didn't clock in for any of your shifts at Kallan's on Sunday (28th), Monday (29th) \u2014 both the 09:00\u201315:00 and 15:00\u201321:00. Did you work those shifts?\n\nYou need to clock in for every single shift, no exceptions. This pattern needs to stop today.\n\nReply here when you've sorted it.",
+        "ts": 1782794556
       }
     ]
   },
@@ -209,6 +229,11 @@
         "role": "amy",
         "text": "Right \u2014 need to flag a couple of serious things from Evan's that need sorting today.\n\nOn Sunday you clocked in at 11:24 when you were scheduled for 9am \u2014 that's 145 mins late. This is the second time I've had to flag a late clock-in with you, so we need to talk through what's going on. Where were you when you clocked in?\n\nAlso, you didn't manually clock out on Saturday or Sunday \u2014 the system auto-closed both shifts at 14:10. This is the second time this has happened too. You need to make sure you're clocking out properly at the end of each shift, yeah?\n\nLet me know what happened and we can sort this.\n\nReply here when you've sorted it.",
         "ts": 1782709775
+      },
+      {
+        "role": "amy",
+        "text": "Right \u2014 need to flag something serious from this period.\n\nYou've clocked 8.2 hours but you were only rostered for 5 hours \u2014 that's 3.2 extra hours. This is the second time I've had to flag overbilling risk with you, so we need to sort it. Are all those extra hours authorised? Let me know so I can verify before anything goes through for billing.\n\nAlso just a heads up \u2014 your amendment request from the 23rd came through and your notes are pending review now, so no action needed from you on that one \ud83d\udc4d\n\nReply here when you've sorted it.",
+        "ts": 1782794556
       }
     ]
   },
