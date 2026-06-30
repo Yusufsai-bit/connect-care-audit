@@ -67,19 +67,19 @@ KALLAN_TITLE_MATCH = "kallan jordan"
 # Kallan overnight detection: shift starts at or after 20:00 OR spans midnight
 OVERNIGHT_START_HOUR = 20
 
-# Form IDs
+# Form IDs — update env vars if forms are ever recreated in Connecteam
 FORMS = {
-    "Kallan Incident Report":    2825220,
-    "Safety Hazard Report":      2825225,
-    "Kallan Medication Form":    3012456,
-    "Kallan Behaviour Tracking": 3018810,
-    "Michael Medications Plan":  4865646,
-    "Medication Incident Form":  7294261,
-    "Incident Report":           9786979,
-    "Kallan: ABC Form":          11694853,
-    "Kallan Sleep Observation":  14773151,
-    "Kallan Daily Cleaning":     15252440,
-    "Joshua: ABC Form":          15535225,
+    "Kallan Incident Report":    int(os.environ.get("FORM_ID_KALLAN_INCIDENT",    "2825220")),
+    "Safety Hazard Report":      int(os.environ.get("FORM_ID_SAFETY_HAZARD",      "2825225")),
+    "Kallan Medication Form":    int(os.environ.get("FORM_ID_KALLAN_MEDS",        "3012456")),
+    "Kallan Behaviour Tracking": int(os.environ.get("FORM_ID_KALLAN_BEHAVIOUR",   "3018810")),
+    "Michael Medications Plan":  int(os.environ.get("FORM_ID_MICHAEL_MEDS",       "4865646")),
+    "Medication Incident Form":  int(os.environ.get("FORM_ID_MED_INCIDENT",       "7294261")),
+    "Incident Report":           int(os.environ.get("FORM_ID_INCIDENT",           "9786979")),
+    "Kallan: ABC Form":          int(os.environ.get("FORM_ID_KALLAN_ABC",         "11694853")),
+    "Kallan Sleep Observation":  int(os.environ.get("FORM_ID_KALLAN_SLEEP",       "14773151")),
+    "Kallan Daily Cleaning":     int(os.environ.get("FORM_ID_KALLAN_CLEANING",    "15252440")),
+    "Joshua: ABC Form":          int(os.environ.get("FORM_ID_JOSHUA_ABC",         "15535225")),
 }
 
 # All form IDs that constitute an "incident report" for frequency counting
