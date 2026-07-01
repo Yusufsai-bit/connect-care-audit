@@ -13,9 +13,11 @@
   },
   "9736867": {
     "worker_name": "Hajar El Hassan",
-    "last_issue_date": "28 Jun 2026",
-    "last_issue_summary": "AUTO CLOCK-OUT (Nicole Loveless); OVERBILLING RISK -- HOURS EXCEED ROSTER ((all clients)); PENDING AMENDMENT -- WORKER NOTICE (Nicole Loveless)",
-    "open_issues": []
+    "last_issue_date": "01 Jul 2026",
+    "last_issue_summary": "TYPE 1 NOTIFIABLE INCIDENT \u2014 24H NDIS COMMISSION REPORT REQUIRED (Incident Report); AUTO CLOCK-OUT (Nicole Loveless); INCIDENT REPORT \u2014 FAILS NDIS STANDARD (Incident Report)",
+    "open_issues": [
+      "TYPE 1 NOTIFIABLE INCIDENT \u2014 24H NDIS COMMISSION REPORT REQUIRED"
+    ]
   },
   "11444927": {
     "worker_name": "Mayada El Hassan",
