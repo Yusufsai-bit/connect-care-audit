@@ -603,5 +603,55 @@
     "worker": "Roja Mehmood",
     "category": "NO CLOCK-IN",
     "date": "2026-06-30"
+  },
+  {
+    "worker": "Ahmed Yehia",
+    "category": "NO CLOCK-IN",
+    "date": "2026-07-01"
+  },
+  {
+    "worker": "Ali Saaram",
+    "category": "OVERBILLING RISK -- HOURS EXCEED ROSTER",
+    "date": "2026-07-01"
+  },
+  {
+    "worker": "Hajar El Hassan",
+    "category": "TYPE 1 NOTIFIABLE INCIDENT \u2014 24H NDIS COMMISSION REPORT REQUIRED",
+    "date": "2026-07-01"
+  },
+  {
+    "worker": "Hajar El Hassan",
+    "category": "AUTO CLOCK-OUT",
+    "date": "2026-07-01"
+  },
+  {
+    "worker": "Hajar El Hassan",
+    "category": "INCIDENT REPORT \u2014 FAILS NDIS STANDARD",
+    "date": "2026-07-01"
+  },
+  {
+    "worker": "Hajar El Hassan",
+    "category": "INCIDENT REPORT \u2014 MISSING WITNESS/NOTIFICATION",
+    "date": "2026-07-01"
+  },
+  {
+    "worker": "Mayada El Hassan",
+    "category": "AUTO CLOCK-OUT",
+    "date": "2026-07-01"
+  },
+  {
+    "worker": "Mohamed Liban",
+    "category": "AUTO CLOCK-OUT",
+    "date": "2026-07-01"
+  },
+  {
+    "worker": "Mohamed Liban",
+    "category": "AUTO CLOCK-OUT",
+    "date": "2026-07-01"
+  },
+  {
+    "worker": "Peter Eronmwon",
+    "category": "NO CLOCK-IN",
+    "date": "2026-07-01"
   }
 ]
