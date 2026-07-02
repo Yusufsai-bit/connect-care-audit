@@ -59,9 +59,11 @@
   },
   "3488476": {
     "worker_name": "Irfanullah Zamir",
-    "last_issue_date": "28 Jun 2026",
-    "last_issue_summary": "PENDING AMENDMENT -- WORKER NOTICE (Kallan Jordan); PENDING AMENDMENT -- WORKER NOTICE (Joshua Gatt)",
-    "open_issues": []
+    "last_issue_date": "02 Jul 2026",
+    "last_issue_summary": "NO CLOCK-IN (Kallan Jordan)",
+    "open_issues": [
+      "NO CLOCK-IN"
+    ]
   },
   "2455370": {
     "worker_name": "Mohamed Liban",
