@@ -1,257 +1,4 @@
 {
-  "3bcf407e574e5dcd480c1565b8f6495f": {
-    "date": "2026-06-29",
-    "worker": "Abdul Latif",
-    "sent_ts": 1782709775,
-    "acknowledged": true,
-    "category": "LATE CLOCK-IN",
-    "client": "Evan Gatt",
-    "pending": false,
-    "followup_24h_sent": true,
-    "escalated_48h": true,
-    "resolved_date": "2026-07-01"
-  },
-  "64fd17383725846de7638ad089bb50ac": {
-    "date": "2026-06-29",
-    "worker": "Abdul Latif",
-    "sent_ts": 1782709775,
-    "acknowledged": true,
-    "category": "AUTO CLOCK-OUT",
-    "client": "Evan Gatt",
-    "pending": false,
-    "resolved_date": "2026-06-30",
-    "followup_24h_sent": true
-  },
-  "79fe0bd5e64cc83b38aad93c09341143": {
-    "date": "2026-06-29",
-    "worker": "Abdul Latif",
-    "sent_ts": 1782709775,
-    "acknowledged": true,
-    "category": "AUTO CLOCK-OUT",
-    "client": "Evan Gatt",
-    "pending": false,
-    "followup_24h_sent": true,
-    "escalated_48h": true,
-    "resolved_date": "2026-07-01"
-  },
-  "248263ca204a3a29d3022293aae28b46": {
-    "date": "2026-06-29",
-    "worker": "Abdul Latif",
-    "sent_ts": 1782709775,
-    "acknowledged": true,
-    "category": "LATE CLOCK-IN",
-    "client": "Evan Gatt",
-    "pending": false,
-    "resolved_date": "2026-06-30",
-    "followup_24h_sent": true
-  },
-  "e006182ffce4d0c03e4891e2c4a63c25": {
-    "date": "2026-06-29",
-    "worker": "Abdul Latif",
-    "sent_ts": 1782709775,
-    "acknowledged": false,
-    "category": "PENDING AMENDMENT -- WORKER NOTICE",
-    "client": "Evan Gatt",
-    "pending": true,
-    "followup_24h_sent": true,
-    "escalated_48h": true
-  },
-  "strike_esc|Abdul Latif": {
-    "date": "2026-06-29",
-    "worker": "Abdul Latif",
-    "category": "strike_escalation",
-    "sent_ts": 1782709775,
-    "acknowledged": true,
-    "resolved_date": "2026-06-30",
-    "followup_24h_sent": true
-  },
-  "7ee6502d7e35cd1ef58e3c746c295e0c": {
-    "date": "2026-06-29",
-    "worker": "Ahmed Yehia",
-    "sent_ts": 1782709775,
-    "acknowledged": false,
-    "category": "PENDING AMENDMENT -- WORKER NOTICE",
-    "client": "Joshua Gatt",
-    "pending": true,
-    "escalated_48h": true
-  },
-  "b284cbb16d26661392fe0f9358b2c4b1": {
-    "date": "2026-06-29",
-    "worker": "Ali Saaram",
-    "sent_ts": 1782709775,
-    "acknowledged": false,
-    "category": "INCIDENT REPORT \u2014 MISSING WITNESS/NOTIFICATION",
-    "client": "Kallan Incident Report",
-    "pending": false,
-    "escalated_48h": true
-  },
-  "ac30413b20072d62548b62053fe579c1": {
-    "date": "2026-06-29",
-    "worker": "Ali Saaram",
-    "sent_ts": 1782709775,
-    "acknowledged": false,
-    "category": "TYPE 2 NOTIFIABLE INCIDENT \u2014 5-DAY NDIS COMMISSION REPORT REQUIRED",
-    "client": "Kallan Incident Report",
-    "pending": false,
-    "escalated_48h": true
-  },
-  "4c20225ea4e67a027f55d97df674850a": {
-    "date": "2026-06-29",
-    "worker": "Ali Saaram",
-    "sent_ts": 1782709775,
-    "acknowledged": false,
-    "category": "PENDING AMENDMENT -- WORKER NOTICE",
-    "client": "Kallan Jordan",
-    "pending": true,
-    "escalated_48h": true
-  },
-  "strike_esc|Ali Saaram": {
-    "date": "2026-06-29",
-    "worker": "Ali Saaram",
-    "category": "strike_escalation",
-    "sent_ts": 1782709775,
-    "acknowledged": true,
-    "resolved_date": "2026-06-30"
-  },
-  "03959795e7ab186bbf623b9afdeb2874": {
-    "date": "2026-06-29",
-    "worker": "Ikram Mohammad",
-    "sent_ts": 1782709775,
-    "acknowledged": true,
-    "category": "OVERBILLING RISK -- HOURS EXCEED ROSTER",
-    "client": "(all clients)",
-    "pending": false,
-    "resolved_date": "2026-06-30",
-    "followup_24h_sent": true
-  },
-  "6c050ae40877e4b904e329f94efb0290": {
-    "date": "2026-06-29",
-    "worker": "Ikram Mohammad",
-    "sent_ts": 1782709775,
-    "acknowledged": false,
-    "category": "PENDING AMENDMENT -- WORKER NOTICE",
-    "client": "Kallan Jordan",
-    "pending": true,
-    "followup_24h_sent": true,
-    "escalated_48h": true
-  },
-  "22eadd02a6eb2d85ac6be8ed6e22913c": {
-    "date": "2026-06-29",
-    "worker": "Peter Eronmwon",
-    "sent_ts": 1782709775,
-    "acknowledged": false,
-    "category": "PENDING AMENDMENT -- WORKER NOTICE",
-    "client": "John Auzagelis",
-    "pending": true,
-    "followup_24h_sent": true,
-    "escalated_48h": true
-  },
-  "b76cd9ecaa876743b0746d474fde8e07": {
-    "date": "2026-06-29",
-    "worker": "(team)",
-    "category": "FORM FREQUENCY -- JOHN",
-    "client": "John",
-    "pending": false,
-    "sent_ts": 1782709775,
-    "acknowledged": true,
-    "resolved_date": "2026-06-30"
-  },
-  "bf200753418e5867d6082e895289c4f7": {
-    "date": "2026-06-29",
-    "worker": "(team)",
-    "category": "FORM FREQUENCY -- JOSHUA",
-    "client": "Joshua Gatt",
-    "pending": false,
-    "sent_ts": 1782709775,
-    "acknowledged": true,
-    "resolved_date": "2026-06-30"
-  },
-  "41cee998664418cd1c0fad968b63c6a7": {
-    "date": "2026-06-29",
-    "worker": "(team)",
-    "category": "FORM FREQUENCY -- NADA",
-    "client": "Nada Haliem",
-    "pending": false,
-    "sent_ts": 1782709775,
-    "acknowledged": true,
-    "resolved_date": "2026-06-30"
-  },
-  "ebf796d63dfe82e70644bcb54619bd4b": {
-    "date": "2026-06-29",
-    "worker": "(team)",
-    "category": "FORM FREQUENCY -- NICOLE",
-    "client": "Nicole Loveless",
-    "pending": false,
-    "sent_ts": 1782709775,
-    "acknowledged": true,
-    "resolved_date": "2026-06-30"
-  },
-  "03e38589f9a931c2a5a1f73ce9a7aafa": {
-    "date": "2026-06-29",
-    "worker": "(team)",
-    "category": "MISSING FORM -- EVAN",
-    "client": "Evan Gatt",
-    "pending": false,
-    "sent_ts": 1782709775,
-    "escalated_48h": true
-  },
-  "0aea33276445c4331613c9552feefa7f": {
-    "date": "2026-06-29",
-    "worker": "(team)",
-    "category": "MISSING FORM -- KALLAN",
-    "client": "Kallan Jordan",
-    "pending": false,
-    "sent_ts": 1782709775,
-    "escalated_48h": true
-  },
-  "45fb8f5c549eddc7561e76de72ec98f6": {
-    "date": "2026-06-29",
-    "worker": "Abdul Latif",
-    "category": "PENDING AMENDMENT -- REVIEW REQUIRED",
-    "client": "Evan Gatt",
-    "pending": true,
-    "sent_ts": 1782709775,
-    "followup_24h_sent": true,
-    "escalated_48h": true
-  },
-  "da6ae0a783cf40357694d6aba6c33227": {
-    "date": "2026-06-29",
-    "worker": "Ahmed Yehia",
-    "category": "PENDING AMENDMENT -- REVIEW REQUIRED",
-    "client": "Joshua Gatt",
-    "pending": true,
-    "sent_ts": 1782709775,
-    "escalated_48h": true
-  },
-  "fde0777871a7af27b2b9b7c4b83f1552": {
-    "date": "2026-06-29",
-    "worker": "Ali Saaram",
-    "category": "PENDING AMENDMENT -- REVIEW REQUIRED",
-    "client": "Kallan Jordan",
-    "pending": true,
-    "sent_ts": 1782709775,
-    "escalated_48h": true
-  },
-  "1bf75b8c5a6cfbb8746998067bfe8f78": {
-    "date": "2026-06-29",
-    "worker": "Ikram Mohammad",
-    "category": "PENDING AMENDMENT -- REVIEW REQUIRED",
-    "client": "Kallan Jordan",
-    "pending": true,
-    "sent_ts": 1782709775,
-    "followup_24h_sent": true,
-    "escalated_48h": true
-  },
-  "5be0156a7256c102f784c9ff3b92fe95": {
-    "date": "2026-06-29",
-    "worker": "Peter Eronmwon",
-    "category": "PENDING AMENDMENT -- REVIEW REQUIRED",
-    "client": "John Auzagelis",
-    "pending": true,
-    "sent_ts": 1782709775,
-    "followup_24h_sent": true,
-    "escalated_48h": true
-  },
   "a14544b00af4a05efded6ba0ac41906b": {
     "date": "2026-06-30",
     "worker": "Abdul Latif",
@@ -330,11 +77,12 @@
     "date": "2026-06-30",
     "worker": "Roja Mehmood",
     "sent_ts": 1782794556,
-    "acknowledged": false,
+    "acknowledged": true,
     "category": "NO CLOCK-IN",
     "client": "Kallan Jordan",
     "pending": false,
-    "followup_24h_sent": true
+    "followup_24h_sent": true,
+    "resolved_date": "2026-07-02"
   },
   "strike_esc|Roja Mehmood": {
     "date": "2026-06-30",
@@ -391,7 +139,8 @@
     "category": "MISSING FORM -- EVAN",
     "client": "Evan Gatt",
     "pending": false,
-    "sent_ts": 1782794556
+    "sent_ts": 1782794556,
+    "escalated_48h": true
   },
   "ee092cc3cd2c8ffdef646d25d96f6bc8": {
     "date": "2026-06-30",
@@ -399,7 +148,8 @@
     "category": "MISSING FORM -- KALLAN",
     "client": "Kallan Jordan",
     "pending": false,
-    "sent_ts": 1782794556
+    "sent_ts": 1782794556,
+    "escalated_48h": true
   },
   "45cdadc3dd3f5b10e52e85b02b89bbfe": {
     "date": "2026-06-30",
@@ -463,10 +213,11 @@
     "date": "2026-07-01",
     "worker": "Ahmed Yehia",
     "sent_ts": 1782882810,
-    "acknowledged": false,
+    "acknowledged": true,
     "category": "NO CLOCK-IN",
     "client": "Joshua Gatt",
-    "pending": false
+    "pending": false,
+    "resolved_date": "2026-07-02"
   },
   "d08ac1e74f0fbd45ea51b65ca9f0f6ea": {
     "date": "2026-07-01",
@@ -526,10 +277,11 @@
     "date": "2026-07-01",
     "worker": "Hajar El Hassan",
     "sent_ts": 1782882810,
-    "acknowledged": false,
+    "acknowledged": true,
     "category": "INCIDENT REPORT \u2014 FAILS NDIS STANDARD",
     "client": "Incident Report",
-    "pending": false
+    "pending": false,
+    "resolved_date": "2026-07-02"
   },
   "114447e02d9c57322a1d2230607102bf": {
     "date": "2026-07-01",
@@ -553,22 +305,27 @@
     "date": "2026-07-01",
     "worker": "Hajar El Hassan",
     "category": "strike_escalation",
-    "sent_ts": 1782882810
+    "sent_ts": 1782882810,
+    "acknowledged": true,
+    "resolved_date": "2026-07-02"
   },
   "e75de4c462a8b3d13f7a5322b36bb272": {
     "date": "2026-07-01",
     "worker": "Mayada El Hassan",
     "sent_ts": 1782882810,
-    "acknowledged": false,
+    "acknowledged": true,
     "category": "AUTO CLOCK-OUT",
     "client": "Nada Haliem",
-    "pending": false
+    "pending": false,
+    "resolved_date": "2026-07-02"
   },
   "strike_esc|Mayada El Hassan": {
     "date": "2026-07-01",
     "worker": "Mayada El Hassan",
     "category": "strike_escalation",
-    "sent_ts": 1782882810
+    "sent_ts": 1782882810,
+    "acknowledged": true,
+    "resolved_date": "2026-07-02"
   },
   "fdf2eaa9d48389d947fe5c6170d82ee7": {
     "date": "2026-07-01",
@@ -583,10 +340,11 @@
     "date": "2026-07-01",
     "worker": "Mohamed Liban",
     "sent_ts": 1782882810,
-    "acknowledged": false,
+    "acknowledged": true,
     "category": "AUTO CLOCK-OUT",
     "client": "Kallan Jordan",
-    "pending": false
+    "pending": false,
+    "resolved_date": "2026-07-02"
   },
   "d876587b08b3698467c39ec3fe1e65c7": {
     "date": "2026-07-01",
@@ -601,7 +359,9 @@
     "date": "2026-07-01",
     "worker": "Mohamed Liban",
     "category": "strike_escalation",
-    "sent_ts": 1782882810
+    "sent_ts": 1782882810,
+    "acknowledged": true,
+    "resolved_date": "2026-07-02"
   },
   "17d6fb7030c00d6eb7ce9586464b2236": {
     "date": "2026-07-01",
@@ -625,7 +385,9 @@
     "date": "2026-07-01",
     "worker": "Peter Eronmwon",
     "category": "strike_escalation",
-    "sent_ts": 1782882810
+    "sent_ts": 1782882810,
+    "acknowledged": true,
+    "resolved_date": "2026-07-02"
   },
   "246aed7bcf2640c37d71c1c6944eb908": {
     "date": "2026-07-01",
@@ -633,7 +395,9 @@
     "category": "FORM FREQUENCY -- JOHN",
     "client": "John",
     "pending": false,
-    "sent_ts": 1782882810
+    "sent_ts": 1782882810,
+    "acknowledged": true,
+    "resolved_date": "2026-07-02"
   },
   "74c22488bc1489d00b81cef59a4c56fb": {
     "date": "2026-07-01",
@@ -641,7 +405,9 @@
     "category": "FORM FREQUENCY -- JOSHUA",
     "client": "Joshua Gatt",
     "pending": false,
-    "sent_ts": 1782882810
+    "sent_ts": 1782882810,
+    "acknowledged": true,
+    "resolved_date": "2026-07-02"
   },
   "6fad95725e9f7290c3f91de80c50ab65": {
     "date": "2026-07-01",
@@ -649,7 +415,9 @@
     "category": "FORM FREQUENCY -- NADA",
     "client": "Nada Haliem",
     "pending": false,
-    "sent_ts": 1782882810
+    "sent_ts": 1782882810,
+    "acknowledged": true,
+    "resolved_date": "2026-07-02"
   },
   "e5bd5dd80508de2a15edff55769ef0b4": {
     "date": "2026-07-01",
@@ -657,7 +425,9 @@
     "category": "MISSING FORM -- EVAN",
     "client": "Evan Gatt",
     "pending": false,
-    "sent_ts": 1782882810
+    "sent_ts": 1782882810,
+    "acknowledged": true,
+    "resolved_date": "2026-07-02"
   },
   "afa73b880a00dca11321fffd337f7c8e": {
     "date": "2026-07-01",
@@ -673,7 +443,9 @@
     "category": "UNDERSTAFFED -- RATIO BREACH",
     "client": "Kallan Jordan",
     "pending": false,
-    "sent_ts": 1782882810
+    "sent_ts": 1782882810,
+    "acknowledged": true,
+    "resolved_date": "2026-07-02"
   },
   "0a33a541b5607c3095a4f6ee145af51c": {
     "date": "2026-07-01",
@@ -689,7 +461,9 @@
     "category": "UNDERSTAFFED -- RATIO BREACH",
     "client": "Kallan Jordan",
     "pending": false,
-    "sent_ts": 1782882810
+    "sent_ts": 1782882810,
+    "acknowledged": true,
+    "resolved_date": "2026-07-02"
   },
   "de8c1bfe52d7cd60a3195c488537a3c9": {
     "date": "2026-07-01",
@@ -751,6 +525,239 @@
     "date": "2026-07-01",
     "category": "invoice_report",
     "worker": "(team)",
-    "sent_ts": 1782882810
+    "sent_ts": 1782882810,
+    "acknowledged": true,
+    "resolved_date": "2026-07-02"
+  },
+  "78bc82a4f125e5091754e9ae16fdbfa5": {
+    "date": "2026-07-02",
+    "worker": "Abdi Rahman",
+    "sent_ts": 1782967608,
+    "acknowledged": false,
+    "category": "NO CLOCK-IN",
+    "client": "John Auzagelis",
+    "pending": false
+  },
+  "strike_esc|Abdi Rahman": {
+    "date": "2026-07-02",
+    "worker": "Abdi Rahman",
+    "category": "strike_escalation",
+    "sent_ts": 1782967608
+  },
+  "08691379966627fc617cd6e54feb53ad": {
+    "date": "2026-07-02",
+    "worker": "Abdul Latif",
+    "sent_ts": 1782967608,
+    "acknowledged": false,
+    "category": "INCIDENT REPORT \u2014 FAILS NDIS STANDARD",
+    "client": "Incident Report",
+    "pending": false
+  },
+  "5e83b1bc2e1926441adeaaff56f4ec1a": {
+    "date": "2026-07-02",
+    "worker": "Abdul Latif",
+    "sent_ts": 1782967608,
+    "acknowledged": false,
+    "category": "INCIDENT REPORT \u2014 MISSING WITNESS/NOTIFICATION",
+    "client": "Incident Report",
+    "pending": false
+  },
+  "4b2cf3df598ce416fcca674c4c43f878": {
+    "date": "2026-07-02",
+    "worker": "Abdul Latif",
+    "sent_ts": 1782967608,
+    "acknowledged": false,
+    "category": "PENDING AMENDMENT -- WORKER NOTICE",
+    "client": "Evan Gatt",
+    "pending": true
+  },
+  "strike_esc|Abdul Latif": {
+    "date": "2026-07-02",
+    "worker": "Abdul Latif",
+    "category": "strike_escalation",
+    "sent_ts": 1782967608
+  },
+  "dfb5be0386b9c822c92c4877bc3f7021": {
+    "date": "2026-07-02",
+    "worker": "Ahmed Yehia",
+    "sent_ts": 1782967608,
+    "acknowledged": false,
+    "category": "PENDING AMENDMENT -- WORKER NOTICE",
+    "client": "Joshua Gatt",
+    "pending": true
+  },
+  "91822bb8f938ee2ac8de46b19fc3de13": {
+    "date": "2026-07-02",
+    "worker": "Ali Saaram",
+    "sent_ts": 1782967608,
+    "acknowledged": false,
+    "category": "AUTO CLOCK-OUT",
+    "client": "Kallan Jordan",
+    "pending": false
+  },
+  "strike_esc|Ali Saaram": {
+    "date": "2026-07-02",
+    "worker": "Ali Saaram",
+    "category": "strike_escalation",
+    "sent_ts": 1782967608
+  },
+  "6a8eb9d1d1f14b5b9cbc262896de9bcf": {
+    "date": "2026-07-02",
+    "worker": "Irfanullah Zamir",
+    "sent_ts": 1782967608,
+    "acknowledged": false,
+    "category": "NO CLOCK-IN",
+    "client": "Kallan Jordan",
+    "pending": false
+  },
+  "06bdf35fd5c94952b9223224ef712963": {
+    "date": "2026-07-02",
+    "worker": "Mohamed Liban",
+    "sent_ts": 1782967608,
+    "acknowledged": false,
+    "category": "OVERBILLING RISK -- HOURS EXCEED ROSTER",
+    "client": "(all clients)",
+    "pending": false
+  },
+  "5c021ea09c76a93ce1ee406a35524475": {
+    "date": "2026-07-02",
+    "worker": "Mohamed Liban",
+    "sent_ts": 1782967608,
+    "acknowledged": false,
+    "category": "PENDING AMENDMENT -- WORKER NOTICE",
+    "client": "Kallan Jordan",
+    "pending": true
+  },
+  "fc66bc7ce93442e10f3e4547a3a1d373": {
+    "date": "2026-07-02",
+    "worker": "Mohamed Liban",
+    "sent_ts": 1782967608,
+    "acknowledged": false,
+    "category": "PENDING AMENDMENT -- WORKER NOTICE",
+    "client": "Kallan Jordan",
+    "pending": true
+  },
+  "15c93d9ace866238444f773ee6552dd6": {
+    "date": "2026-07-02",
+    "worker": "Peter Eronmwon",
+    "sent_ts": 1782967608,
+    "acknowledged": false,
+    "category": "PENDING AMENDMENT -- WORKER NOTICE",
+    "client": "John Auzagelis",
+    "pending": true
+  },
+  "79a9f04702c09806f1478f8fdd9a8a00": {
+    "date": "2026-07-02",
+    "worker": "Roja Mehmood",
+    "sent_ts": 1782967608,
+    "acknowledged": false,
+    "category": "NO CLOCK-IN",
+    "client": "Kallan Jordan",
+    "pending": false
+  },
+  "1c6dfabe001582b398b274217bb58b99": {
+    "date": "2026-07-02",
+    "worker": "Roja Mehmood",
+    "sent_ts": 1782967608,
+    "acknowledged": false,
+    "category": "NO CLOCK-IN",
+    "client": "Kallan Jordan",
+    "pending": false
+  },
+  "a45bde0114fbd1c34f3358054f62c0a2": {
+    "date": "2026-07-02",
+    "worker": "(team)",
+    "category": "FORM FREQUENCY -- JOHN",
+    "client": "John",
+    "pending": false,
+    "sent_ts": 1782967608
+  },
+  "5b025c98b7823b04fa5a3ec9e72d6735": {
+    "date": "2026-07-02",
+    "worker": "(team)",
+    "category": "FORM FREQUENCY -- JOSHUA",
+    "client": "Joshua Gatt",
+    "pending": false,
+    "sent_ts": 1782967608
+  },
+  "a421aaff183351cfdc04bec58f6d869e": {
+    "date": "2026-07-02",
+    "worker": "(team)",
+    "category": "FORM FREQUENCY -- NADA",
+    "client": "Nada Haliem",
+    "pending": false,
+    "sent_ts": 1782967608
+  },
+  "304149eb56fddbedfaaa101858c7a217": {
+    "date": "2026-07-02",
+    "worker": "(team)",
+    "category": "MISSING FORM -- EVAN",
+    "client": "Evan Gatt",
+    "pending": false,
+    "sent_ts": 1782967608
+  },
+  "f1139bbee8d6020de0ea31f93c9a9a89": {
+    "date": "2026-07-02",
+    "worker": "(team)",
+    "category": "MISSING FORM -- KALLAN",
+    "client": "Kallan Jordan",
+    "pending": false,
+    "sent_ts": 1782967608
+  },
+  "2e4d3e26e41da354e6eff6d5f84ace99": {
+    "date": "2026-07-02",
+    "worker": "Ali Saaram",
+    "category": "UNDERSTAFFED -- RATIO BREACH",
+    "client": "Kallan Jordan",
+    "pending": false,
+    "sent_ts": 1782967608
+  },
+  "517b6c81207c9bf6506c30f0dd84b7d7": {
+    "date": "2026-07-02",
+    "worker": "Ali Saaram",
+    "category": "UNDERSTAFFED -- RATIO BREACH",
+    "client": "Kallan Jordan",
+    "pending": false,
+    "sent_ts": 1782967608
+  },
+  "2a7ba7acab889ea4aca1f5ecf672f54a": {
+    "date": "2026-07-02",
+    "worker": "Abdul Latif",
+    "category": "PENDING AMENDMENT -- REVIEW REQUIRED",
+    "client": "Evan Gatt",
+    "pending": true,
+    "sent_ts": 1782967608
+  },
+  "6f01b621d8d3b5faf2860d0f64f6c8b9": {
+    "date": "2026-07-02",
+    "worker": "Ahmed Yehia",
+    "category": "PENDING AMENDMENT -- REVIEW REQUIRED",
+    "client": "Joshua Gatt",
+    "pending": true,
+    "sent_ts": 1782967608
+  },
+  "82ca79e74228c5e7d7c6ada5c77e1622": {
+    "date": "2026-07-02",
+    "worker": "Mohamed Liban",
+    "category": "PENDING AMENDMENT -- REVIEW REQUIRED",
+    "client": "Kallan Jordan",
+    "pending": true,
+    "sent_ts": 1782967608
+  },
+  "d5c0619eb221daf19bc2a6b3bf91cd92": {
+    "date": "2026-07-02",
+    "worker": "Mohamed Liban",
+    "category": "PENDING AMENDMENT -- REVIEW REQUIRED",
+    "client": "Kallan Jordan",
+    "pending": true,
+    "sent_ts": 1782967608
+  },
+  "6e0baac4c7e4d7666627928c0d324525": {
+    "date": "2026-07-02",
+    "worker": "Peter Eronmwon",
+    "category": "PENDING AMENDMENT -- REVIEW REQUIRED",
+    "client": "John Auzagelis",
+    "pending": true,
+    "sent_ts": 1782967608
   }
 }

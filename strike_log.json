@@ -653,5 +653,45 @@
     "worker": "Peter Eronmwon",
     "category": "NO CLOCK-IN",
     "date": "2026-07-01"
+  },
+  {
+    "worker": "Abdi Rahman",
+    "category": "NO CLOCK-IN",
+    "date": "2026-07-02"
+  },
+  {
+    "worker": "Abdul Latif",
+    "category": "INCIDENT REPORT \u2014 FAILS NDIS STANDARD",
+    "date": "2026-07-02"
+  },
+  {
+    "worker": "Abdul Latif",
+    "category": "INCIDENT REPORT \u2014 MISSING WITNESS/NOTIFICATION",
+    "date": "2026-07-02"
+  },
+  {
+    "worker": "Ali Saaram",
+    "category": "AUTO CLOCK-OUT",
+    "date": "2026-07-02"
+  },
+  {
+    "worker": "Irfanullah Zamir",
+    "category": "NO CLOCK-IN",
+    "date": "2026-07-02"
+  },
+  {
+    "worker": "Mohamed Liban",
+    "category": "OVERBILLING RISK -- HOURS EXCEED ROSTER",
+    "date": "2026-07-02"
+  },
+  {
+    "worker": "Roja Mehmood",
+    "category": "NO CLOCK-IN",
+    "date": "2026-07-02"
+  },
+  {
+    "worker": "Roja Mehmood",
+    "category": "NO CLOCK-IN",
+    "date": "2026-07-02"
   }
 ]

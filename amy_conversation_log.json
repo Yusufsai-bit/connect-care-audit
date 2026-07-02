@@ -17,6 +17,11 @@
         "role": "amy",
         "text": "Abdi \u2014 we need to talk about Friday on Rathdowne Street at Kallan's. Where were you when you clocked in? Our system's got you 12.4km away from the address, but you should be within 500m. This is the 5th time I've had to flag a GPS mismatch with you in the last month \u2014 that's not okay, it needs to be sorted every time. What happened?\n\nReply here when you've sorted it.",
         "ts": 1782535326
+      },
+      {
+        "role": "amy",
+        "text": "Abdi \u2014 we need to sort this out today. You were rostered 09:00\u201314:00 at John's on Tuesday the 30th and never clocked in. This is the 4th time I've had to flag a no-show clock-in with you in the last month \u2014 that's not okay, it needs to be sorted every time.\n\nDid you work that shift or not?\n\nReply here when you've sorted it.",
+        "ts": 1782967608
       }
     ]
   },
@@ -53,6 +58,11 @@
         "role": "amy",
         "text": "Ali \u2014 need to flag something serious. You've clocked 18.0h this period but you're only rostered for 6.0h. That's 12 extra hours, and this is the 3rd time I've had to flag overbilling issues with you in the last 30 days \u2014 that's not okay.\n\nBefore I process any billing, I need you to go through and verify which of those extra hours were actually authorised. If they weren't approved, they can't go through.\n\nAlso got your shift amendments from Tuesday and Wednesday \u2014 notes have come through and I'm reviewing them now, so no action needed from you there.\n\nReply here when you've sorted it.",
         "ts": 1782882810
+      },
+      {
+        "role": "amy",
+        "text": "Ali \u2014 this is the 3rd time I've had to flag the auto clock-out issue at Kallan's on Tuesday. You didn't clock out manually before the system closed at 15:10 \u2014 what time did you actually leave? This needs to be sorted every time, not just when I chase it up.\n\nReply here when you've sorted it.",
+        "ts": 1782967608
       }
     ]
   },
@@ -69,6 +79,11 @@
         "role": "amy",
         "text": "Just a heads up \u2014 we've got a couple of shift amendments from you that are pending review. Your notes from Kallan's on Saturday the 27th and Joshua's on Sunday the 28th have come through and we're looking them over now. Nothing you need to do on your end, just wanted you to know we've got them \ud83d\udc4d\n\nReply here when you've sorted it.",
         "ts": 1782624072
+      },
+      {
+        "role": "amy",
+        "text": "Hey \u2014 just flagged something that needs sorting today. You didn't clock in at all for your shift at Kallan's on Tuesday the 30th (was meant to be 21:00\u201309:00). Did you end up working that one? If you did, you'll need to add the amendment in Connecteam so we can get it processed.\n\nReply here when you've sorted it.",
+        "ts": 1782967608
       }
     ]
   },
@@ -141,6 +156,11 @@
         "role": "amy",
         "text": "Mohamed, need to flag a couple of things from your recent shifts.\n\nThis is the 9th time I've had to flag you not clocking out manually \u2014 that's not okay, it needs to be sorted every single time. On Tuesday and Monday at Kallan's, the system had to force-close your shifts at 21:10 because you didn't clock out. You need to clock out before you leave, yeah?\n\nAlso got your shift amendment notes through for Tuesday \u2014 they're pending review on our end, so nothing else needed from you on that one.\n\nReply here when you've sorted it.",
         "ts": 1782882810
+      },
+      {
+        "role": "amy",
+        "text": "Mohamed, need to flag something serious. You've clocked 32.9 hours this period but you're only rostered for 12.0 \u2014 that's 20.9 extra hours. This is the 3rd time I've had to flag overbilling risk with you, and we can't bill any of those extra hours until you confirm which ones were actually approved. Get back to me on that today.\n\nAlso got your shift amendment notes through for Wednesday \u2014 they're pending review on our end, so nothing else needed from you on that one.\n\nReply here when you've sorted it.",
+        "ts": 1782967608
       }
     ]
   },
@@ -187,6 +207,11 @@
         "role": "amy",
         "text": "Peter \u2014 need to flag something critical from Joshua's on Tuesday the 30th. You were rostered 09:00\u201314:00 but I've got no clock-in recorded for that shift at all. Did you work that one? This is the 3rd time I've had to flag a missing clock-in with you in the last month \u2014 that's not okay, it needs to be sorted every time.\n\nAlso just a heads up \u2014 your shift amendment for Wednesday the 1st at John's came through and we've got your notes. That's all pending review on our end, nothing you need to do there.\n\nReply here when you've sorted it.",
         "ts": 1782882810
+      },
+      {
+        "role": "amy",
+        "text": "Hey Peter \u2014 just a heads up on your shift amendment for Thursday the 2nd at John's. Your notes came through and we've got them \u2014 that's all pending review on our end so nothing you need to do there.\n\nReply here when you've sorted it.",
+        "ts": 1782967608
       }
     ]
   },
@@ -213,6 +238,11 @@
         "role": "amy",
         "text": "Roja, this is the 7th time I've had to flag this \u2014 that's not okay, it needs to be sorted every time.\n\nYou didn't clock in for any of your shifts at Kallan's on Sunday (28th), Monday (29th) \u2014 both the 09:00\u201315:00 and 15:00\u201321:00. Did you work those shifts?\n\nYou need to clock in for every single shift, no exceptions. This pattern needs to stop today.\n\nReply here when you've sorted it.",
         "ts": 1782794556
+      },
+      {
+        "role": "amy",
+        "text": "Roja, this is the 10th time I've had to flag this \u2014 that's not okay, it needs to be sorted every time.\n\nYou didn't clock in for your shifts at Kallan's on Tuesday 30th June and Wednesday 1st July, both 15:00\u201321:00. Did you work those shifts?\n\nYou need to clock in for every single shift, no exceptions. This pattern needs to stop today.\n\nReply here when you've sorted it.",
+        "ts": 1782967608
       }
     ]
   },
@@ -259,6 +289,11 @@
         "role": "amy",
         "text": "Hey \u2014 just need to touch base on a couple things from Evan's.\n\nThose incident reports from Thursday and Friday still need proper notes in them for NDIS. Can you open those shifts in Connecteam and fill in what happened and who was involved? They need to go in within 30 mins of the shift ending so we can process them properly.\n\nAlso, quick heads up \u2014 your amendment request from the 23rd came through and your notes are pending review now, so no action needed from you on that one \ud83d\udc4d\n\nReply here when you've sorted it.",
         "ts": 1782882810
+      },
+      {
+        "role": "amy",
+        "text": "Hey \u2014 just need to touch base on a couple things from Evan's.\n\nThat incident report from Wednesday still needs proper notes in it for NDIS. Can you open that shift in Connecteam and fill in what actually happened \u2014 like what was going on with Evan before and after, exactly what behaviours you saw, and who you notified about it? Also need the exact time it happened. These need to go in within 30 mins of the shift ending so we can process them properly.\n\nQuick heads up too \u2014 your amendment request from the 23rd came through and your notes are pending review now, so no action needed from you on that one \ud83d\udc4d\n\nReply here when you've sorted it.",
+        "ts": 1782967608
       }
     ]
   },
@@ -342,6 +377,11 @@
         "role": "amy",
         "text": "Hey Ahmed \u2014 need to flag something from Monday at Joshua's. You never clocked in for your 09:00 shift \u2014 did you actually work that day? This is the second time I've had to flag a missing clock-in with you, so I need to get this sorted today.\n\nAlso got your shift amendment request for Wednesday \u2014 your notes are in and pending review on our end, nothing more you need to do.\n\nReply here when you've sorted it.",
         "ts": 1782882810
+      },
+      {
+        "role": "amy",
+        "text": "Hey Ahmed \u2014 just checking on your shift amendment for Thursday at Joshua's. Got your notes and they're pending review on our end, so nothing more you need to do from your side \u2014 we'll let you know once it's sorted.\n\nReply here when you've sorted it.",
+        "ts": 1782967608
       }
     ]
   }
